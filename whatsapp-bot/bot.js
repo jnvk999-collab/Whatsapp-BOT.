@@ -428,7 +428,7 @@ async function offerDispatch(file, meta = {}) {
   }
   // From Downloads or Gmail: only genuine policy documents. Forwarded by you: always.
   if (auto && !ins.isPolicy) {
-    console.log(`[dispatch] ${path.basename(file)}: ${ins.looksLikeQuote ? 'a quote' : 'not a policy document'}, ignored`);
+    console.log(`[dispatch] ${path.basename(file)}: ${ins.looksLikeQuote ? 'a quote' : `not a policy document (${ins.textLength} characters of text, policy no ${ins.info && ins.info.policyNo ? ins.info.policyNo : 'not found'})`}, ignored`);
     return;
   }
   const prop = dispatch.propose(file, vehicle);

@@ -26,10 +26,15 @@ async function inspect(file) {
   const info = policy.parse(text);
   const name = path.basename(file);
   const looksLikeQuote = /quote|quotation|proposal form|premium calc/i.test(name) || /\bQUOTATION\b|\bQuote\b.*\bIndicative\b|Indicative quote/i.test(text);
-  const isPolicy = !!(info.policyNo && (info.to || /period of insurance|policy period|certificate of insurance|policy schedule/i.test(text))) && !looksLikeQuote;
+  // a scanned policy has no readable text, so trust a file name that says so
+  const nameSaysPolicy = /policy[ _-]*(document|copy|schedule|certificate)|^policy[ _-]/i.test(name);
+  const isPolicy = !looksLikeQuote && (
+    !!(info.policyNo && (info.to || /period of insurance|policy period|certificate of insurance|policy schedule/i.test(text)))
+    || (nameSaysPolicy && text.replace(/\s/g, '').length < 200)   // name says policy and nothing readable inside
+  );
   const found = extractNumbers(text + ' ' + name.replace(/[_\-.]/g, ' '));
   let best = null, n = 0; for (const [k, v] of found) if (v > n) { best = k; n = v; }
-  return { vehicle: best, isPolicy, info, looksLikeQuote };
+  return { vehicle: best, isPolicy, info, looksLikeQuote, textLength: text.replace(/\s/g, '').length };
 }
 
 async function vehicleFromPdf(file) {
