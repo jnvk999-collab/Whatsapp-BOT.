@@ -526,60 +526,100 @@ ${qr ? '<p>Open WhatsApp on your phone &gt; Linked devices &gt; Link a device, a
 startStatusPage();
 
 // ── connection ─────────────────────────────────────────────────────────────
+// One socket at a time. Every reconnect closes the old one and drops its
+// listeners first, otherwise dead sockets pile up, each asking for another
+// reconnect, and WhatsApp starts dropping all of them (error 428/440).
+let connecting = false;          // a start() is already in flight
+let reconnects = 0;              // consecutive failures, for the backoff
+let lastOpenAt = Date.now();     // when we were last actually connected
+
 async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
-  sock = makeWASocket({ version, auth: state, logger, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
-  sock.ev.on('creds.update', saveCreds);
+  if (connecting) return;
+  connecting = true;
+  const mySock = {};             // identity of this attempt
+  try {
+    if (sock) { try { sock.ev.removeAllListeners(); } catch {} try { sock.end(undefined); } catch {} sock = null; }
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+    sock = makeWASocket({ version, auth: state, logger, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
+    sock.__id = mySock;
+    sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', async (u) => {
-    const { connection, lastDisconnect, qr } = u;
-    if (qr) {
-      QRCode.toFile(QR_PNG, qr, { width: 400 }).catch(() => {});
-      console.log('\n==============================================');
-      console.log('Open WhatsApp on your phone > Linked devices > Link a device');
-      console.log('and scan the QR below, or open this image: ' + QR_PNG);
-      console.log('==============================================\n');
-      qrcodeTerminal.generate(qr, { small: true });
-    }
-    if (u.receivedPendingNotifications) console.log('[whatsapp] caught up with everything received while offline');
-    if (connection === 'open') {
-      try { fs.unlinkSync(QR_PNG); } catch {}
-      myJid = jidNormalizedUser(sock.user.id);
-      if (CFG.ocrVehicle) vehicle.warmUp();
-      if (!global.__dispatchStarted) { global.__dispatchStarted = true; startDispatchWatch(); }
-      if (mailer.enabled()) mailer.verify().then(() => console.log('[mail] email login OK, PDFs will also be emailed to ' + process.env.EMAIL_TO)).catch(e => console.error('[mail] email login FAILED: ' + e.message));
-      console.log(`Ready as ${number(myJid)}. Inbox: ${org.ROOT}  Merged PDFs: ${org.MERGED_ROOT}  min photos: ${CFG.minPhotos}  merge wait: ${CFG.mergeWaitSeconds}s  PDF to: ${CFG.pdfTo}  groups: ${CFG.replyInGroups ? (CFG.allowGroups.join(', ') || 'all') : 'off'}`);
-      if (CFG.replyInGroups) {
-        try {
-          const groups = Object.values(await sock.groupFetchAllParticipating());
-          groups.forEach(g => groupNames.set(g.id, g.subject));
-          const list = groups.map(g => g.subject).sort((a, b) => a.localeCompare(b));
-          fs.writeFileSync(path.join(__dirname, 'groups.txt'),
-            '# All groups this number is in (written at every start).\n' +
-            '# To handle ONLY some groups: create allowed-groups.txt and put one group name per line.\n' +
-            '# To skip some groups: put their names in ignore-list.txt.\n\n' + list.join('\n') + '\n');
-          const allow = ignore.allowedGroups();
-          console.log(`[groups] ${list.length} groups written to groups.txt` + (allow ? `; handling only the ${allow.size} in allowed-groups.txt` : '; handling all (create allowed-groups.txt to limit)'));
-        } catch (e) { console.log('[groups] could not list groups: ' + e.message); }
+    sock.ev.on('connection.update', async (u) => {
+      const { connection, lastDisconnect, qr } = u;
+      if (qr) {
+        QRCode.toFile(QR_PNG, qr, { width: 400 }).catch(() => {});
+        console.log('\n==============================================');
+        console.log('Open WhatsApp on your phone > Linked devices > Link a device');
+        console.log('and scan the QR below, or open this image: ' + QR_PNG);
+        console.log('==============================================\n');
+        qrcodeTerminal.generate(qr, { small: true });
       }
-    }
-    if (connection === 'close') {
-      const code = lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) {
-        console.error('Logged out from the phone. Delete the baileys_auth folder and run node bot.js again to re-link.');
-        process.exit(1);
+      if (u.receivedPendingNotifications) console.log('[whatsapp] caught up with everything received while offline');
+      if (!sock || sock.__id !== mySock) return;      // an old socket talking; ignore it
+      if (connection === 'open') {
+        reconnects = 0; lastOpenAt = Date.now();
+        try { fs.unlinkSync(QR_PNG); } catch {}
+        myJid = jidNormalizedUser(sock.user.id);
+        if (CFG.ocrVehicle) vehicle.warmUp();
+        if (!global.__dispatchStarted) { global.__dispatchStarted = true; startDispatchWatch(); }
+        if (mailer.enabled()) mailer.verify().then(() => console.log('[mail] email login OK, PDFs will also be emailed to ' + process.env.EMAIL_TO)).catch(e => console.error('[mail] email login FAILED: ' + e.message));
+        console.log(`Ready as ${number(myJid)}. Inbox: ${org.ROOT}  Merged PDFs: ${org.MERGED_ROOT}  min photos: ${CFG.minPhotos}  merge wait: ${CFG.mergeWaitSeconds}s  PDF to: ${CFG.pdfTo}  groups: ${CFG.replyInGroups ? (CFG.allowGroups.join(', ') || 'all') : 'off'}`);
+        if (CFG.replyInGroups) {
+          try {
+            const groups = Object.values(await sock.groupFetchAllParticipating());
+            groups.forEach(g => groupNames.set(g.id, g.subject));
+            const list = groups.map(g => g.subject).sort((a, b) => a.localeCompare(b));
+            fs.writeFileSync(path.join(__dirname, 'groups.txt'),
+              '# All groups this number is in (written at every start).\n' +
+              '# To handle ONLY some groups: create allowed-groups.txt and put one group name per line.\n' +
+              '# To skip some groups: put their names in ignore-list.txt.\n\n' + list.join('\n') + '\n');
+            const allow = ignore.allowedGroups();
+            console.log(`[groups] ${list.length} groups written to groups.txt` + (allow ? `; handling only the ${allow.size} in allowed-groups.txt` : '; handling all (create allowed-groups.txt to limit)'));
+          } catch (e) { console.log('[groups] could not list groups: ' + e.message); }
+        }
       }
-      console.log(`[whatsapp] connection closed (${code || 'unknown'}), reconnecting...`);
-      setTimeout(start, 3000);
-    }
-  });
+      if (connection === 'close') {
+        const code = lastDisconnect?.error?.output?.statusCode;
+        if (code === DisconnectReason.loggedOut) {
+          console.error('Logged out from the phone. Delete the baileys_auth folder and run node bot.js again to re-link.');
+          process.exit(1);
+        }
+        console.log(`[whatsapp] connection closed (${code || 'unknown'})`);
+        scheduleReconnect();
+      }
+    });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    for (const m of messages) { try { await onMessage(m); } catch (e) { console.error('[upsert] ' + e.message); } }
-  });
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+      for (const m of messages) { try { await onMessage(m); } catch (e) { console.error('[upsert] ' + e.message); } }
+    });
+
+  } catch (e) {
+    console.error('[whatsapp] could not start: ' + e.message);
+    scheduleReconnect();
+  } finally { connecting = false; }
 }
+
+/** Reconnect with a growing wait, so a dead network does not spin the CPU. */
+function scheduleReconnect() {
+  reconnects++;
+  const wait = Math.min(3000 * Math.pow(1.7, Math.min(reconnects, 8)), 120000);
+  console.log(`[whatsapp] reconnecting in ${Math.round(wait / 1000)}s (attempt ${reconnects})`);
+  setTimeout(() => start().catch(e => console.error('[whatsapp] ' + e.message)), wait);
+}
+
+// Watchdog: if we have not been connected for 15 minutes, stop the process.
+// run.js starts a clean one straight away - no typing needed.
+setInterval(() => {
+  if (stopping) return;
+  if (fs.existsSync(QR_PNG)) { lastOpenAt = Date.now(); return; }   // waiting for you to scan; not a fault
+  const downFor = Date.now() - lastOpenAt;
+  if (downFor > 15 * 60 * 1000) {
+    console.error(`[watchdog] no WhatsApp connection for ${Math.round(downFor / 60000)} minutes, restarting the bot`);
+    process.exit(1);
+  }
+}, 60 * 1000);
 
 // A bad photo or a library hiccup must never take the bot down.
 process.on('uncaughtException', e => console.error('[fatal-caught] ' + (e && e.stack || e)));
