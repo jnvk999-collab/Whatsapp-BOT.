@@ -182,11 +182,53 @@ const digitsOf = s => {
 };
 const safe = s => String(s || '').replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
 
+// ── finding the folders by itself ──────────────────────────────────────────
+// With no folders given, look where the files normally end up: Desktop,
+// Downloads, Documents, this folder, and one level inside each of those.
+const WA_PHOTO = /^(IMG|VID|PHOTO)[-_]\d{8}[-_]WA\d+/i;
+function looksLikePhotoFolder(dir) {
+  try { return fs.readdirSync(dir).some(f => WA_PHOTO.test(f) || /^\d{8}-PHOTO-/i.test(f)); } catch { return false; }
+}
+function looksLikeChatExport(file) {
+  try { return LINE.test(fs.readFileSync(file, 'utf8').replace(INVISIBLE, '').split(/\r?\n/).slice(0, 40).find(l => LINE.test(l)) || ''); } catch { return false; }
+}
+function autoFind() {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const roots = [__dirname, ...['Desktop', 'Downloads', 'Documents', 'OneDrive/Desktop', 'OneDrive/Documents']
+    .map(d => path.join(home, d))].filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+  const found = new Set();
+  const look = (dir, depth) => {
+    if (depth > 3 || found.size > 40) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    if (entries.some(e => e.isFile() && (WA_PHOTO.test(e.name) || /^\d{8}-PHOTO-/i.test(e.name)))) { found.add(dir); return; }
+    for (const e of entries) {
+      if (e.isDirectory()) { if (!/^(node_modules|\.|inbox|merged|logs|baileys_auth)/i.test(e.name)) look(path.join(dir, e.name), depth + 1); continue; }
+      if (/\.txt$/i.test(e.name) && /chat/i.test(e.name) && looksLikeChatExport(path.join(dir, e.name))) found.add(dir);
+    }
+  };
+  roots.forEach(r => look(r, 0));
+  return [...found];
+}
+
 // ── main ───────────────────────────────────────────────────────────────────
 (async () => {
   if (!folders.length) {
+    console.log('No folder given, so I will look for the photos and chat exports myself.');
+    console.log('(Run "node backfill.js --help" to see all the options.)\n');
+    const guessed = autoFind();
+    if (!guessed.length) {
+      console.log('Nothing found. Put the photos and the exported chats on the Desktop, in Downloads or in Documents, then run this again. What to copy:\n');
+      console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*?/, '').replace(/^ \* ?/gm, ''));
+      process.exit(1);
+    }
+    guessed.forEach(g => console.log('  using ' + g));
+    console.log('');
+    folders.push(...guessed);
+  }
+  if (has('help')) {
     console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*?/, '').replace(/^ \* ?/gm, ''));
-    process.exit(1);
+    process.exit(0);
   }
   let done = {};
   try { done = JSON.parse(fs.readFileSync(DONE_FILE, 'utf8')); } catch {}

@@ -325,7 +325,7 @@ async function handleQuote(m, text, label) {
 }
 
 // ── message handling ───────────────────────────────────────────────────────
-async function onMessage(m) {
+async function onMessage(m, opts = {}) {
   if (!m.message) return;
   if (m.key.id && (seenSet.has(m.key.id) || inFlight.has(m.key.id))) return;   // handled already, or being handled now
   // A PDF you forward into your own chat from the phone -> offer to send it to the requester
@@ -423,7 +423,7 @@ async function onMessage(m) {
         org.log({ type: 'media-failed', contact: label, caption: text, tries });
         if (tries >= 3) {
           markSeen(m.key.id);            // give up, but say so instead of going quiet
-          await notifyOwner(`Could not download a photo from ${label} after several tries. Ask them to send it again.`);
+          if (!opts.quiet) await notifyOwner(`Could not download a photo from ${label} after several tries. Ask them to send it again.`);
         } else {
           console.log(`[media] leaving it unread so WhatsApp can resend it (${tries} of 3)`);
         }
@@ -693,6 +693,20 @@ async function start() {
         connected = false;
         console.log(`[whatsapp] connection closed (${code || 'unknown'})`);
         scheduleReconnect();
+      }
+    });
+
+    // When the phone hands over history (after linking, or when WhatsApp
+    // reconciles), take the recent photos from it too. Old media is usually
+    // gone from WhatsApp's servers, so failures here are expected and quiet.
+    sock.ev.on('messaging-history.set', async ({ messages }) => {
+      if (!messages || !messages.length) return;
+      const cutoff = Date.now() - CFG.catchUpDays * 86400000;
+      const recent = messages.filter(m => m && m.message && mediaOf(m) && Number(m.messageTimestamp || 0) * 1000 >= cutoff);
+      if (!recent.length) return;
+      console.log(`[history] the phone sent ${messages.length} old message(s); ${recent.length} recent photo(s) to look at`);
+      for (const m of recent) {
+        try { await onMessage(m, { quiet: true }); } catch (e) { console.error('[history] ' + e.message); }
       }
     });
 
