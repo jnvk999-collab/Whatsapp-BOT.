@@ -109,7 +109,7 @@ function Has-Photos($folder) {
   foreach ($i in $folder.Items()) {
     $n++
     if ((-not $i.IsFolder) -and (Is-Photo (Real-Name $i))) { return $true }
-    if ($n -ge 60) { break }
+    if ($n -ge 25) { break }
   }
   return $false
 }
@@ -168,47 +168,54 @@ Write-Output ("FOUND " + $usedPath)
 
 $destNs = $shell.NameSpace($dest)
 
-# FAST PATH. Handing Windows one month at a time lets it move thousands of
-# photos in a single transfer, instead of this script asking for them one by
-# one, which is what made it crawl. A month already fully copied is skipped.
-function Local-Count($pattern) {
-  return @(Get-ChildItem -LiteralPath $dest -Filter $pattern -File -ErrorAction SilentlyContinue).Count
+# FAST PATH: hand the whole folder to Windows in ONE transfer and watch the
+# destination fill up. Never ask the phone to count or filter anything: every
+# such question makes it read all nineteen thousand entries before answering,
+# which is what made this look frozen. Dates are sorted out later, on the
+# computer, where it costs nothing.
+function Local-Count() {
+  return @(Get-ChildItem -LiteralPath $dest -File -Recurse -ErrorAction SilentlyContinue).Count
 }
-$batchWorked = $false
-$totalCopied = 0
-$totalHad = 0
-foreach ($ym in $months) {
-  $pat = 'IMG-' + $ym + '*'
-  $items = $src.Items()
-  $srcN = 0
-  try { $items.Filter(64, $pat); $srcN = $items.Count } catch { $srcN = 0 }
-  if ($srcN -le 0) { continue }
-  $batchWorked = $true
-  $have = Local-Count $pat
-  Write-Output ("MONTH " + $ym + " " + $srcN + " " + $have)
-  if ($listOnly) { $totalHad += $have; continue }
-  if ($have -ge $srcN) { $totalHad += $have; continue }
-  $destNs.CopyHere($items, 20)
-  $last = -1; $stuck = 0
-  while ($true) {
-    Start-Sleep -Seconds 2
-    $now = Local-Count $pat
-    if ($now -ge $srcN) { break }
-    if ($now -eq $last) { $stuck++ } else { $stuck = 0; Write-Output ("MONTHPROG " + $ym + " " + $now + " " + $srcN) }
-    $last = $now
-    if ($stuck -ge 30) { break }        # a minute with nothing new: move on
-  }
-  $final = Local-Count $pat
-  $totalCopied += [Math]::Max(0, $final - $have)
-  $totalHad += $have
-  Write-Output ("MONTHDONE " + $ym + " " + $final + " " + $srcN)
-}
-if ($batchWorked) {
-  if ($listOnly) { Write-Output ("DONE copied=0 already=" + $totalHad + " failed=0"); exit }
-  Write-Output ("DONE copied=" + $totalCopied + " already=" + $totalHad + " failed=0")
+$marker = Join-Path $dest '.copy-complete'
+$before = Local-Count
+Write-Output ("HAVE " + $before)
+if (Test-Path -LiteralPath $marker) {
+  Write-Output 'ALLDONE'
+  Write-Output ("DONE copied=0 already=" + $before + " failed=0")
   exit
 }
+if ($listOnly) {
+  Write-Output 'READY'
+  Write-Output ("DONE copied=0 already=" + $before + " failed=0")
+  exit
+}
+
+Write-Output 'STARTING'
+$copyFailed = $false
+try { $destNs.CopyHere($src.Items(), 20) } catch { $copyFailed = $true }
+
+if (-not $copyFailed) {
+  $last = $before
+  $quiet = 0
+  $started = $false
+  while ($true) {
+    Start-Sleep -Seconds 3
+    $now = Local-Count
+    if ($now -ne $last) { $started = $true; $quiet = 0; Write-Output ("COPIED " + $now) } else { $quiet++ }
+    $last = $now
+    # nothing new for 30s before anything started, or 2 minutes after: finished
+    if (-not $started -and $quiet -ge 10) { break }
+    if ($started -and $quiet -ge 40) { break }
+  }
+  $final = Local-Count
+  if ($final -gt $before) {
+    Set-Content -LiteralPath $marker -Value ([string]$final) -ErrorAction SilentlyContinue
+    Write-Output ("DONE copied=" + ($final - $before) + " already=" + $before + " failed=0")
+    exit
+  }
+}
 Write-Output 'SLOWPATH'
+Write-Output 'SCAN 0 0'
 
 # SLOW PATH, only if the phone does not name its photos IMG-<date>: walk the
 # folder and one level of subfolders, one file at a time.
@@ -292,6 +299,7 @@ child.stdin.write(ps);
 child.stdin.end();
 
 let tail = '', samplesShown = false;
+const t0 = Date.now();
 const show = (chunk) => {
   tail += chunk.toString();
   let i;
@@ -308,16 +316,17 @@ const show = (chunk) => {
     else if (line.startsWith('FOUND ')) console.log('Reading ' + line.slice(6) + '\n');
     else if (line.startsWith('SCAN ')) { const [, seen, want] = line.split(' '); process.stdout.write(`\r  reading the phone... ${seen} seen, ${want} to copy   `); }
     else if (line.startsWith('CAPPED ')) console.log(`\n  stopping the scan at ${line.slice(7)} new photos (--max)`);
-    else if (line.startsWith('MONTH ')) { const [, ym, n, have] = line.split(' '); const m = ym.slice(4) + '/' + ym.slice(0, 4); console.log(`  ${m}: ${n} photo(s) on the phone` + (+have ? `, ${have} already copied` : '')); }
-    else if (line.startsWith('MONTHPROG ')) { const [, ym, now, all] = line.split(' '); process.stdout.write(`\r    copying ${ym.slice(4)}/${ym.slice(0, 4)}... ${now} of ${all}     `); }
-    else if (line.startsWith('MONTHDONE ')) { const [, ym, now, all] = line.split(' '); console.log(`\r    ${ym.slice(4)}/${ym.slice(0, 4)}: ${now} of ${all} copied            `); }
+    else if (line.startsWith('ALLDONE')) console.log('This folder is already fully copied. Delete .copy-complete inside it if you want to copy again.');
+    else if (line.startsWith('READY')) console.log('The phone is reachable and the folder is readable. Run it without --list to copy.');
+    else if (line.startsWith('STARTING')) console.log('Asking Windows to copy the whole folder in one go. The first files take a minute to appear.\nWindows may show its own copy window with a time estimate: that is normal, let it run.');
+    else if (line.startsWith('COPIED ')) { const n = +line.slice(7); const el = Math.round((Date.now() - t0) / 1000); process.stdout.write(`\r  ${n} photo(s) copied so far, ${el}s elapsed      `); }
     else if (line.startsWith('SLOWPATH')) console.log('  (the phone does not use IMG-date names, reading it file by file instead)');
     else if (line.startsWith('SAMPLE ')) { if (!samplesShown) { console.log('\n  a few of the file names on the phone:'); samplesShown = true; } console.log('    ' + line.slice(7)); }
     else if (line.startsWith('LOSTPHONE')) console.log('\nThe phone disconnected part-way. Unlock it, choose "File transfer" again, and run the same command: it carries on from where it stopped.');
     else if (line.startsWith('ERROR ')) console.log('\nThe phone connection gave an error: ' + line.slice(6) + '\nUnplug, plug back in, choose "File transfer", and run it again.');
     else if (line.startsWith('REJECT ')) { const m = line.match(/notphoto=(\d+) tooold=(\d+)/); if (m) console.log(`  ${m[1]} were not photos, ${m[2]} were older than ${SINCE}`); }
     else if (line.startsWith('TOTAL ')) console.log('\n' + line.slice(6) + ' file(s) read on the phone');
-    else if (line.startsWith('HAVE ')) { if (+line.slice(5)) console.log(line.slice(5) + ' already copied before, skipping those'); }
+    else if (line.startsWith('HAVE ')) { if (+line.slice(5)) console.log(line.slice(5) + ' photo(s) already in that folder from before'); }
     else if (line.startsWith('WANTED ')) console.log(line.slice(7) + ' photo(s) to copy from ' + SINCE + ' onwards\n');
     else if (line.startsWith('PROGRESS ')) console.log('  ' + line.slice(9));
     else if (line.startsWith('FAIL ')) console.log('  could not copy ' + line.slice(5) + ' (it will be tried again next run)');
