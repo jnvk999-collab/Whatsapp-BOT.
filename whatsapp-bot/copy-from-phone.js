@@ -61,6 +61,11 @@ $maxFiles = ${MAX}
 $listOnly = $${has('list') ? 'true' : 'false'}
 
 $shell = New-Object -ComObject Shell.Application
+trap {
+  if ($_.Exception.Message -match 'not available|disconnected|RPC|0x800700|device') { Write-Output 'LOSTPHONE' }
+  else { Write-Output ("ERROR " + $_.Exception.Message) }
+  exit
+}
 
 function Find-Child($folder, $name) {
   foreach ($i in $folder.Items()) { if ($i.IsFolder -and $i.Name -eq $name) { return $i.GetFolder } }
@@ -148,7 +153,7 @@ Write-Output ("FOUND " + $usedPath)
 $queue = New-Object System.Collections.Queue
 $queue.Enqueue($src)
 $wanted = New-Object System.Collections.ArrayList
-$seen = 0; $already = 0; $depth = 0
+$seen = 0; $already = 0; $depth = 0; $samples = 0; $rejType = 0; $rejOld = 0
 while ($queue.Count -gt 0) {
   $folder = $queue.Dequeue()
   $depth++
@@ -157,9 +162,15 @@ while ($queue.Count -gt 0) {
     if ($seen % 200 -eq 0) { Write-Output ("SCAN " + $seen + " " + $wanted.Count) }
     if ($i.IsFolder) { if ($depth -le 1) { $queue.Enqueue($i.GetFolder) }; continue }
     $nm = Real-Name $i
-    if (-not (Is-Photo $nm)) { continue }
+    # Show the first few so a filter that rejects everything is visible, not a mystery
+    if ($samples -lt 12) {
+      $samples++
+      $d8 = [regex]::Match($nm, '(\\d{8})')
+      Write-Output ("SAMPLE name=[" + $nm + "] shellName=[" + $i.Name + "] photo=" + (Is-Photo $nm) + " datefound=" + $(if ($d8.Success) { $d8.Groups[1].Value } else { 'none' }))
+    }
+    if (-not (Is-Photo $nm)) { $rejType++; continue }
     $m = [regex]::Match($nm, '(\\d{8})')
-    if ($m.Success) { if ([int]$m.Groups[1].Value -lt $sinceNum) { continue } }
+    if ($m.Success) { if ([int]$m.Groups[1].Value -lt $sinceNum) { $rejOld++; continue } }
     # count the cap against files that still need copying, so every run makes progress
     if (Test-Path -LiteralPath (Join-Path $dest $nm)) { $already++; continue }
     [void]$wanted.Add($i)
@@ -168,6 +179,7 @@ while ($queue.Count -gt 0) {
   if ($maxFiles -gt 0 -and $wanted.Count -ge $maxFiles) { break }
 }
 Write-Output ("TOTAL " + $seen)
+Write-Output ("REJECT notphoto=" + $rejType + " tooold=" + $rejOld)
 Write-Output ("HAVE " + $already)
 Write-Output ("WANTED " + $wanted.Count)
 if ($listOnly) { exit }
@@ -218,7 +230,7 @@ const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass
 child.stdin.write(ps);
 child.stdin.end();
 
-let tail = '';
+let tail = '', samplesShown = false;
 const show = (chunk) => {
   tail += chunk.toString();
   let i;
@@ -235,6 +247,10 @@ const show = (chunk) => {
     else if (line.startsWith('FOUND ')) console.log('Reading ' + line.slice(6) + '\n');
     else if (line.startsWith('SCAN ')) { const [, seen, want] = line.split(' '); process.stdout.write(`\r  reading the phone... ${seen} seen, ${want} to copy   `); }
     else if (line.startsWith('CAPPED ')) console.log(`\n  stopping the scan at ${line.slice(7)} new photos (--max)`);
+    else if (line.startsWith('SAMPLE ')) { if (!samplesShown) { console.log('\n  a few of the file names on the phone:'); samplesShown = true; } console.log('    ' + line.slice(7)); }
+    else if (line.startsWith('LOSTPHONE')) console.log('\nThe phone disconnected part-way. Unlock it, choose "File transfer" again, and run the same command: it carries on from where it stopped.');
+    else if (line.startsWith('ERROR ')) console.log('\nThe phone connection gave an error: ' + line.slice(6) + '\nUnplug, plug back in, choose "File transfer", and run it again.');
+    else if (line.startsWith('REJECT ')) { const m = line.match(/notphoto=(\d+) tooold=(\d+)/); if (m) console.log(`  ${m[1]} were not photos, ${m[2]} were older than ${SINCE}`); }
     else if (line.startsWith('TOTAL ')) console.log('\n' + line.slice(6) + ' file(s) read on the phone');
     else if (line.startsWith('HAVE ')) { if (+line.slice(5)) console.log(line.slice(5) + ' already copied before, skipping those'); }
     else if (line.startsWith('WANTED ')) console.log(line.slice(7) + ' photo(s) to copy from ' + SINCE + ' onwards\n');
