@@ -125,7 +125,13 @@ When someone sends a payment-confirmation screenshot (proposal number + amount),
 
 ## Catching up on old photos
 
-`node backfill.js <folder>` turns photos you already have into merged PDFs, filed under `merged/<year>/<month>/<day>/` exactly like the live ones, with a row in the monthly Excel register. It reads either a WhatsApp chat export (Chat > More > Export chat > Include media, unzipped) or a plain folder of photos copied off the phone. Options: `--since 2025-11-01`, `--until`, `--gap 30` (minutes of quiet that ends a set), `--min 3`, `--no-ocr`, `--dry`. Nothing is emailed or sent on WhatsApp, numbers in `ignore-list.txt` are skipped, and re-running continues where it stopped.
+`node backfill.js <folder> [more folders]` turns photos you already have into merged PDFs, filed under `merged/<year>/<month>/<day>/` like the live ones, with a row each in the monthly Excel register.
+
+On Android, to keep the sender's name: copy `Internal storage\\Android\\media\\com.whatsapp\\WhatsApp\\Media\\WhatsApp Images` off the phone once, then export each chat **without** media (a small text file) into a second folder, and pass both. The text files say who sent which photo and when; the photos come from the media folder. PDFs are named `<VEHICLE>_<Sender>_<date>.pdf`. Photos no chat file accounts for are still merged, grouped by date and named by vehicle number.
+
+On iPhone, export each chat with media, unzip, and pass the unzipped folders.
+
+Options: `--since 2025-11-01`, `--until`, `--gap 30` (minutes of quiet that ends a set), `--min 3`, `--only-numbers` (skip group chats), `--no-ocr`, `--dry`. Nothing is emailed or sent on WhatsApp, names and numbers in `ignore-list.txt` are skipped entirely, and re-running continues where it stopped.
 
 ## Renewals
 
