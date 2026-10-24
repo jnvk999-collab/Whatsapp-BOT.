@@ -88,15 +88,41 @@ function markSeen(id) {
   if (seen.length > 5000) { const drop = seen.splice(0, seen.length - 5000); drop.forEach(d => seenSet.delete(d)); }
   try { fs.mkdirSync(org.ROOT, { recursive: true }); fs.writeFileSync(SEEN_FILE, JSON.stringify(seen)); } catch {}
 }
-const groupNames = new Map();          // jid -> group subject
+// jid -> group subject. Kept on disk too: if WhatsApp refuses to tell us the name
+// (a dropped connection), we still know it from last time and photos are not lost.
+const GROUPS_CACHE = path.join(__dirname, 'groups-cache.json');
+const groupNames = new Map();
+try { for (const [k, v] of Object.entries(JSON.parse(fs.readFileSync(GROUPS_CACHE, 'utf8')))) groupNames.set(k, v); } catch {}
+let groupsCacheDirty = false;
+function rememberGroup(jid, subject) {
+  if (!subject || groupNames.get(jid) === subject) return;
+  groupNames.set(jid, subject);
+  groupsCacheDirty = true;
+}
+setInterval(() => {
+  if (!groupsCacheDirty) return;
+  groupsCacheDirty = false;
+  try { fs.writeFileSync(GROUPS_CACHE, JSON.stringify(Object.fromEntries(groupNames), null, 1)); } catch {}
+}, 10000).unref();
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const number = jid => (jid || '').split('@')[0].split(':')[0];
 
 async function groupName(jid) {
-  if (groupNames.has(jid)) return groupNames.get(jid);
-  try { const md = await sock.groupMetadata(jid); groupNames.set(jid, md.subject || ''); return md.subject || ''; }
-  catch { return ''; }
+  const known = groupNames.get(jid);
+  if (known) return known;
+  // A flaky socket can refuse metadata; try a few times before giving up, because
+  // an unknown name used to mean the photos were thrown away.
+  for (let i = 0; i < 3; i++) {
+    try {
+      const md = await sock.groupMetadata(jid);
+      if (md && md.subject) { rememberGroup(jid, md.subject); return md.subject; }
+    } catch (e) {
+      if (i === 2) console.log(`[groups] could not read the name of ${jid}: ${e.message}`);
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  return '';
 }
 
 async function contactLabel(m) {
@@ -122,8 +148,14 @@ async function allowed(m) {
   if (isGroup) {
     if (!CFG.replyInGroups) return false;
     const gname = await groupName(jid);
-    if (CFG.allowGroups.length && !CFG.allowGroups.includes(gname.toLowerCase())) return false;
-    if (!ignore.groupAllowed(gname)) { if (mediaOf(m)) console.log(`[ignore] group "${gname}" not in allowed-groups.txt`); return false; }
+    if (!gname) {
+      // Name unknown (connection trouble). Never throw the photos away for that:
+      // handle them and say so, rather than losing a customer's vehicle photos.
+      if (mediaOf(m)) console.log(`[groups] name of ${jid} unknown right now, handling it anyway so nothing is lost`);
+    } else {
+      if (CFG.allowGroups.length && !CFG.allowGroups.includes(gname.toLowerCase())) return false;
+      if (!ignore.groupAllowed(gname)) { if (mediaOf(m)) console.log(`[ignore] group "${gname}" not in allowed-groups.txt`); return false; }
+    }
   }
   const sender = m.key.fromMe ? number(myJid) : number(isGroup ? m.key.participant : jid);
   if (CFG.allowList.length && !m.key.fromMe && !CFG.allowList.includes(sender)) return false;
@@ -568,7 +600,7 @@ async function start() {
         if (CFG.replyInGroups) {
           try {
             const groups = Object.values(await sock.groupFetchAllParticipating());
-            groups.forEach(g => groupNames.set(g.id, g.subject));
+            groups.forEach(g => rememberGroup(g.id, g.subject));
             const list = groups.map(g => g.subject).sort((a, b) => a.localeCompare(b));
             fs.writeFileSync(path.join(__dirname, 'groups.txt'),
               '# All groups this number is in (written at every start).\n' +
@@ -576,7 +608,16 @@ async function start() {
               '# To skip some groups: put their names in ignore-list.txt.\n\n' + list.join('\n') + '\n');
             const allow = ignore.allowedGroups();
             console.log(`[groups] ${list.length} groups written to groups.txt` + (allow ? `; handling only the ${allow.size} in allowed-groups.txt` : '; handling all (create allowed-groups.txt to limit)'));
-          } catch (e) { console.log('[groups] could not list groups: ' + e.message); }
+          } catch (e) {
+          console.log(`[groups] could not list groups: ${e.message}; using the ${groupNames.size} name(s) remembered from last time, will try again in 2 minutes`);
+          setTimeout(async () => {
+            try {
+              const gs = Object.values(await sock.groupFetchAllParticipating());
+              gs.forEach(g => rememberGroup(g.id, g.subject));
+              console.log(`[groups] second try: ${gs.length} groups read`);
+            } catch (e2) { console.log('[groups] second try failed too: ' + e2.message); }
+          }, 120000);
+        }
         }
       }
       if (connection === 'close') {

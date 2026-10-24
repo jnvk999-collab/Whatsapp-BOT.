@@ -48,6 +48,7 @@ It installs Node.js and the bot, asks for your name and email settings, installs
 ```
 node start.js      # runs in the background, no window
 node status.js     # running? version? last log lines
+node doctor.js     # why are photos not turning into PDFs? checks everything and says what to fix
 node stop.js       # stops it (finishes pending photos first)
 ```
 
