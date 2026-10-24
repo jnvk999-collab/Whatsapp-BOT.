@@ -37,7 +37,8 @@ if (process.platform !== 'win32') {
 fs.mkdirSync(DEST, { recursive: true });
 
 // Folders to try on the phone, newest Android layout first.
-const PATHS = [
+const FORCED = flag('path', '');
+const PATHS = FORCED ? [FORCED.split(/[\\/]+/).filter(Boolean)] : [
   ['Internal storage', 'Android', 'media', 'com.whatsapp', 'WhatsApp', 'Media', 'WhatsApp Images'],
   ['Internal shared storage', 'Android', 'media', 'com.whatsapp', 'WhatsApp', 'Media', 'WhatsApp Images'],
   ['Phone', 'Android', 'media', 'com.whatsapp', 'WhatsApp', 'Media', 'WhatsApp Images'],
@@ -71,6 +72,9 @@ Write-Output ("PHONES " + (($devices | ForEach-Object { $_.Name }) -join ' | '))
 
 $src = $null
 $usedPath = ''
+# Phones often have BOTH WhatsApp folders, one of them empty. Look in every
+# candidate and keep the one that actually holds photos, not the first that exists.
+$best = 0
 foreach ($dev in $devices) {
   $paths = @(${psList})
   foreach ($p in $paths) {
@@ -80,11 +84,39 @@ foreach ($dev in $devices) {
       $cur = Find-Child $cur $seg
       if ($cur -eq $null) { $ok = $false; break }
     }
-    if ($ok) { $src = $cur; $usedPath = ($dev.Name + '/' + ($p -join '/')); break }
+    if (-not $ok) { continue }
+    $c = 0
+    try { $c = $cur.Items().Count } catch { $c = 0 }
+    if ($c -eq 0) { Start-Sleep -Milliseconds 700; try { $c = $cur.Items().Count } catch { $c = 0 } }
+    Write-Output ("CANDIDATE " + $c + " " + $dev.Name + '/' + ($p -join '/'))
+    if ($c -gt $best) { $best = $c; $src = $cur; $usedPath = ($dev.Name + '/' + ($p -join '/')) }
   }
-  if ($src -ne $null) { break }
 }
-if ($src -eq $null) { Write-Output 'NOFOLDER'; exit }
+
+# Nothing anywhere: show what IS in the WhatsApp media folders, to see where it went
+if ($src -eq $null -or $best -eq 0) {
+  foreach ($dev in $devices) {
+    foreach ($mediaPath in @(@('Internal shared storage','Android','media','com.whatsapp','WhatsApp','Media'),
+                             @('Internal storage','Android','media','com.whatsapp','WhatsApp','Media'),
+                             @('Internal shared storage','WhatsApp','Media'),
+                             @('Internal storage','WhatsApp','Media'),
+                             @('Internal shared storage','Android','media'),
+                             @('Internal storage','Android','media'))) {
+      $cur = $dev.GetFolder
+      $ok = $true
+      foreach ($seg in $mediaPath) { $cur = Find-Child $cur $seg; if ($cur -eq $null) { $ok = $false; break } }
+      if (-not $ok) { continue }
+      Write-Output ("INSIDE " + $dev.Name + '/' + ($mediaPath -join '/'))
+      foreach ($sub in $cur.Items()) {
+        $n = ''
+        if ($sub.IsFolder) { try { $n = ' (' + $sub.GetFolder.Items().Count + ' items)' } catch { $n = '' } }
+        Write-Output ("   - " + $sub.Name + $n)
+      }
+    }
+  }
+  Write-Output 'NOFOLDER'
+  exit
+}
 Write-Output ("FOUND " + $usedPath)
 
 # One pass over the folder. Growing an array with += copies it every time, which
@@ -143,7 +175,10 @@ const show = (chunk) => {
     if (!line) continue;
     if (line.startsWith('NOPHONE')) console.log('No phone found. Unlock it, and on the phone choose "File transfer" for the USB connection, then run this again.');
     else if (line.startsWith('PHONES ')) console.log('Phone seen: ' + line.slice(7));
-    else if (line.startsWith('NOFOLDER')) console.log('The phone is connected but I could not find the WhatsApp Images folder on it.\nOpen the phone in Explorer and tell me the path you see.');
+    else if (line.startsWith('CANDIDATE ')) { const [, n, ...rest] = line.split(' '); console.log(`  ${String(n).padStart(6)} file(s) in ${rest.join(' ')}`); }
+    else if (line.startsWith('INSIDE ')) console.log('\nWhat is actually inside ' + line.slice(7) + ':');
+    else if (line.startsWith('   - ')) console.log(line);
+    else if (line.startsWith('NOFOLDER')) console.log('\nNo WhatsApp photos found on the phone through this connection.\nSend me the list above and I will point it at the right folder.\nIf the list is empty too, the phone is probably in "Charging only" mode: on the phone, tap the USB notification and choose File transfer.');
     else if (line.startsWith('FOUND ')) console.log('Reading ' + line.slice(6) + '\n');
     else if (line.startsWith('TOTAL ')) console.log(line.slice(6) + ' file(s) on the phone');
     else if (line.startsWith('WANTED ')) console.log(line.slice(7) + ' of them are photos from ' + SINCE + ' onwards\n');
