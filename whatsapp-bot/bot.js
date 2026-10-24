@@ -67,6 +67,7 @@ const CFG = {
   // Only make a PDF when a set has at least this many photos (vehicle inspection sets).
   // Single greeting images / forwards are filed in the inbox but produce nothing.
   minPhotos: parseInt(process.env.MIN_PHOTOS || '3', 10),
+  catchUpDays: parseFloat(process.env.CATCH_UP_DAYS || '3'),   // how far back to catch up after being offline
 };
 const prettyReg = r => r ? r.replace(/^([A-Z]{2}\d{2})([A-Z]{1,3})(\d{4})$/, '$1 $2 $3').replace(/^(\d{2}BH)(\d{4})([A-Z]{1,2})$/, '$1 $2 $3') : '';
 
@@ -82,6 +83,10 @@ const SEEN_FILE = path.join(org.ROOT, 'processed.json');
 let seen = [];
 try { seen = JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8')); } catch {}
 const seenSet = new Set(seen);
+// Messages being worked on right now (so the same one is not started twice),
+// and how many times a download has failed for each.
+const inFlight = new Set();
+const failedTries = new Map();
 function markSeen(id) {
   if (!id || seenSet.has(id)) return;
   seenSet.add(id); seen.push(id);
@@ -108,21 +113,29 @@ setInterval(() => {
 // ── helpers ────────────────────────────────────────────────────────────────
 const number = jid => (jid || '').split('@')[0].split(':')[0];
 
+const groupLookups = new Map();   // jid -> in-flight promise, so four callers ask once
+const groupMisses = new Map();    // jid -> when the last lookup failed
 async function groupName(jid) {
   const known = groupNames.get(jid);
   if (known) return known;
-  // A flaky socket can refuse metadata; try a few times before giving up, because
-  // an unknown name used to mean the photos were thrown away.
-  for (let i = 0; i < 3; i++) {
-    try {
-      const md = await sock.groupMetadata(jid);
-      if (md && md.subject) { rememberGroup(jid, md.subject); return md.subject; }
-    } catch (e) {
-      if (i === 2) console.log(`[groups] could not read the name of ${jid}: ${e.message}`);
+  const missedAt = groupMisses.get(jid);
+  if (missedAt && Date.now() - missedAt < 60000) return '';   // asked recently and it failed; do not stall the photo
+  if (groupLookups.has(jid)) return groupLookups.get(jid);
+  const p = (async () => {
+    for (let i = 0; i < 2; i++) {
+      try {
+        const md = await sock.groupMetadata(jid);
+        if (md && md.subject) { rememberGroup(jid, md.subject); groupMisses.delete(jid); return md.subject; }
+      } catch (e) {
+        if (i === 1) console.log(`[groups] could not read the name of ${jid}: ${e.message}`);
+      }
+      if (i === 0) await new Promise(r => setTimeout(r, 800));
     }
-    await new Promise(r => setTimeout(r, 1500));
-  }
-  return '';
+    groupMisses.set(jid, Date.now());
+    return '';
+  })().finally(() => groupLookups.delete(jid));
+  groupLookups.set(jid, p);
+  return p;
 }
 
 async function contactLabel(m) {
@@ -185,6 +198,21 @@ async function sendText(jid, text) { return remember(await sock.sendMessage(jid,
 async function sendPdf(jid, file, caption) {
   return remember(await sock.sendMessage(jid, { document: fs.readFileSync(file), mimetype: 'application/pdf', fileName: path.basename(file), caption }));
 }
+// WhatsApp refuses to send while the socket is down, so wait for it to come back
+// instead of losing the PDF. Returns true if it went out.
+async function sendPdfWhenPossible(jid, file, caption, what) {
+  const waits = [0, 5000, 15000, 30000, 60000];
+  for (let i = 0; i < waits.length; i++) {
+    if (waits[i]) await new Promise(r => setTimeout(r, waits[i]));
+    try { await sendPdf(jid, file, caption); return true; }
+    catch (e) {
+      console.error(`[pdf] could not send ${what} (try ${i + 1} of ${waits.length}): ${e.message}`);
+    }
+  }
+  console.error(`[pdf] gave up sending ${what}; the PDF is saved on this computer`);
+  return false;
+}
+
 async function notifyOwner(text) { try { if (myJid) await sendText(myJid, '🤖 ' + text); } catch (e) { console.error('[notify] ' + e.message); } }
 
 // ── photo batching → merged PDF ────────────────────────────────────────────
@@ -236,9 +264,13 @@ const batcher = new PhotoBatcher({
       const photos = items.filter(i => i.kind === 'Photo').length, pdfs = items.length - photos;
       let caption = `${vehLabel ? vehLabel + ' - ' : ''}${label}: ${photos} photo${photos === 1 ? '' : 's'}${pdfs ? ` + ${pdfs} PDF${pdfs === 1 ? '' : 's'}` : ''} merged (${pages} page${pages === 1 ? '' : 's'}).`;
       if (skipped.length) caption += ` Skipped ${skipped.length} unsupported file(s).`;
-      if (CFG.pdfTo === 'me' || CFG.pdfTo === 'both') await sendPdf(myJid, out, caption);
-      if (CFG.pdfTo === 'sender' || CFG.pdfTo === 'both') await sendPdf(chatId, out, `Merged into one PDF (${pages} page${pages === 1 ? '' : 's'}).`);
+      // The PDF is already on disk. Each delivery below stands on its own: a dead
+      // WhatsApp socket must not stop the email, and a failed email must not stop
+      // the register. Nothing here is allowed to throw away the finished PDF.
       console.log(`[pdf] ${label}: ${pages} pages${vehLabel ? ', vehicle ' + vehLabel : ', no vehicle number found'} -> ${archived}`);
+      const delivery = [];
+      if (CFG.pdfTo === 'me' || CFG.pdfTo === 'both') delivery.push(sendPdfWhenPossible(myJid, out, caption, 'to your chat'));
+      if (CFG.pdfTo === 'sender' || CFG.pdfTo === 'both') delivery.push(sendPdfWhenPossible(chatId, out, `Merged into one PDF (${pages} page${pages === 1 ? '' : 's'}).`, 'to the sender'));
       const emailed = [];
       const regRow = {
         date, time: stamp.toTimeString().slice(0, 5), vehicle: vehLabel || '', sender: first.name || '', number: number(first.sender),
@@ -260,9 +292,10 @@ const batcher = new PhotoBatcher({
           await notifyOwner(`PDF was sent here but the email failed: ${e.message}`);
         }
       }
-      await register.add(regRow);
+      try { await register.add(regRow); } catch (e) { console.error('[register] ' + e.message); }
+      await Promise.allSettled(delivery);
     } catch (e) {
-      console.error('[pdf] merge failed: ' + e.message);
+      console.error('[pdf] could not build the PDF: ' + e.message);
       await notifyOwner(`Could not merge files from ${label}. They are saved in the inbox folder.`);
     }
   },
@@ -294,7 +327,7 @@ async function handleQuote(m, text, label) {
 // ── message handling ───────────────────────────────────────────────────────
 async function onMessage(m) {
   if (!m.message) return;
-  if (m.key.id && seenSet.has(m.key.id)) return;          // already handled before a restart/reconnect
+  if (m.key.id && (seenSet.has(m.key.id) || inFlight.has(m.key.id))) return;   // handled already, or being handled now
   // A PDF you forward into your own chat from the phone -> offer to send it to the requester
   if (m.key.fromMe && myJid && m.key.remoteJid === myJid && !sentByBot.has(m.key.id)) {
     const med = mediaOf(m);
@@ -363,15 +396,35 @@ async function onMessage(m) {
   const sentAt = m.messageTimestamp ? new Date(Number(m.messageTimestamp) * 1000) : new Date();
   const ageMin = Math.round((Date.now() - sentAt) / 60000);
   if (ageMin > 2) console.log(`[offline] catching up: message from ${label} sent ${ageMin} min ago (${sentAt.toLocaleString('en-IN')})`);
-  markSeen(m.key.id);
+  // NOT marked as handled yet: if the download fails we want WhatsApp to be able
+  // to hand it to us again rather than losing the photo for good.
+  if (m.key.id) inFlight.add(m.key.id);
   try {
     const media = mediaOf(m);
     if (media) {
       let buf = null;
-      try { buf = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage }); }
-      catch (e) { console.error(`[media] could not download from ${label}: ${e.message}`); }
-      if (!buf) { org.log({ type: 'media-failed', contact: label, caption: text }); return; }
+      for (let attempt = 1; attempt <= 3 && !buf; attempt++) {
+        try { buf = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage }); }
+        catch (e) {
+          console.error(`[media] download from ${label} failed (try ${attempt} of 3): ${e.message}`);
+          if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 4000));
+        }
+      }
+      if (!buf) {
+        const tries = (failedTries.get(m.key.id) || 0) + 1;
+        failedTries.set(m.key.id, tries);
+        org.log({ type: 'media-failed', contact: label, caption: text, tries });
+        if (tries >= 3) {
+          markSeen(m.key.id);            // give up, but say so instead of going quiet
+          await notifyOwner(`Could not download a photo from ${label} after several tries. Ask them to send it again.`);
+        } else {
+          console.log(`[media] leaving it unread so WhatsApp can resend it (${tries} of 3)`);
+        }
+        return;
+      }
       const file = org.saveMedia(label, { data: buf.toString('base64'), mimetype: media.mimetype }, { caption: text, from: jid });
+      markSeen(m.key.id);                 // safely on disk now
+      failedTries.delete(m.key.id);
       const mergeable = /^image\/(jpeg|png)$/i.test(media.mimetype) || media.mimetype === 'application/pdf';
       if (CFG.autoMergePdf && mergeable) {
         const isGroup = jid.endsWith('@g.us');
@@ -392,6 +445,7 @@ async function onMessage(m) {
       if (CFG.autoReplyQuotes && text && require('./lib/intents').isQuoteRequest(text)) await handleQuote(m, text, label);
       return;
     }
+    markSeen(m.key.id);                   // plain text: nothing to download, so it is done
     if (/^(pdf|merge|done)$/i.test(text)) {
       if (batcher.pending(jid)) return batcher.flush(jid);
       if (CFG.pdfTo !== 'me') return sendText(jid, 'No photos waiting. Send the photos first, then *pdf*.');
@@ -402,6 +456,8 @@ async function onMessage(m) {
     org.log({ type: 'text', contact: label, text });
   } catch (e) {
     console.error(`[handler] ${label}: ${e.message}`);
+  } finally {
+    if (m.key.id) inFlight.delete(m.key.id);
   }
 }
 
@@ -563,7 +619,8 @@ startStatusPage();
 // reconnect, and WhatsApp starts dropping all of them (error 428/440).
 let connecting = false;          // a start() is already in flight
 let reconnects = 0;              // consecutive failures, for the backoff
-let lastOpenAt = Date.now();     // when we were last actually connected
+let lastOpenAt = Date.now();     // when we last knew the connection was good
+let connected = false;           // true between 'open' and 'close'
 
 async function start() {
   if (connecting) return;
@@ -573,7 +630,7 @@ async function start() {
     if (sock) { try { sock.ev.removeAllListeners(); } catch {} try { sock.end(undefined); } catch {} sock = null; }
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
-    sock = makeWASocket({ version, auth: state, logger, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false });
+    sock = makeWASocket({ version, auth: state, logger, printQRInTerminal: false, syncFullHistory: false, markOnlineOnConnect: false, defaultQueryTimeoutMs: 20000 });
     sock.__id = mySock;
     sock.ev.on('creds.update', saveCreds);
 
@@ -590,7 +647,7 @@ async function start() {
       if (u.receivedPendingNotifications) console.log('[whatsapp] caught up with everything received while offline');
       if (!sock || sock.__id !== mySock) return;      // an old socket talking; ignore it
       if (connection === 'open') {
-        reconnects = 0; lastOpenAt = Date.now();
+        reconnects = 0; lastOpenAt = Date.now(); connected = true;
         try { fs.unlinkSync(QR_PNG); } catch {}
         myJid = jidNormalizedUser(sock.user.id);
         if (CFG.ocrVehicle) vehicle.warmUp();
@@ -626,14 +683,28 @@ async function start() {
           console.error('Logged out from the phone. Delete the baileys_auth folder and run node bot.js again to re-link.');
           process.exit(1);
         }
+        connected = false;
         console.log(`[whatsapp] connection closed (${code || 'unknown'})`);
         scheduleReconnect();
       }
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify') return;
-      for (const m of messages) { try { await onMessage(m); } catch (e) { console.error('[upsert] ' + e.message); } }
+      // 'notify' = live message. 'append' = the backlog WhatsApp replays after a
+      // reconnect. Both must be handled or every photo sent while the laptop was
+      // offline is thrown away. Duplicates are stopped by the seen set instead.
+      if (type !== 'notify' && type !== 'append') return;
+      for (const m of messages) {
+        try {
+          // A replayed backlog can reach far back (especially right after linking
+          // the phone). Only catch up on the last few days, never the whole history.
+          if (type === 'append' && m.messageTimestamp) {
+            const ageDays = (Date.now() - Number(m.messageTimestamp) * 1000) / 86400000;
+            if (ageDays > CFG.catchUpDays) continue;
+          }
+          await onMessage(m);
+        } catch (e) { console.error('[upsert] ' + e.message); }
+      }
     });
 
   } catch (e) {
@@ -654,11 +725,14 @@ function scheduleReconnect() {
 // run.js starts a clean one straight away - no typing needed.
 setInterval(() => {
   if (stopping) return;
+  // 'open' fires once per socket, so a healthy connection must keep this fresh
+  // itself, or the watchdog would restart a perfectly good bot every 15 minutes.
+  if (connected && sock && sock.ws && sock.ws.isOpen !== false) { lastOpenAt = Date.now(); return; }
   if (fs.existsSync(QR_PNG)) { lastOpenAt = Date.now(); return; }   // waiting for you to scan; not a fault
   const downFor = Date.now() - lastOpenAt;
   if (downFor > 15 * 60 * 1000) {
     console.error(`[watchdog] no WhatsApp connection for ${Math.round(downFor / 60000)} minutes, restarting the bot`);
-    process.exit(1);
+    gracefulStop('watchdog').catch(() => process.exit(1));
   }
 }, 60 * 1000);
 

@@ -63,6 +63,7 @@ function withTimeout(promise, ms, what) {
 }
 
 let workerPromise = null;
+let tmpSeq = 0;      // keeps two photos in the same millisecond from sharing a temp name
 async function getWorker() {
   if (!workerPromise) {
     const { createWorker } = require('tesseract.js');
@@ -72,7 +73,19 @@ async function getWorker() {
     if (firstTime) console.log('[ocr] first run: downloading English reading data (about 4 MB)...');
     const p = createWorker('eng', 1, {
       cachePath: cache, logger: () => {},
-      errorHandler: (e) => { console.error('[ocr] worker error: ' + (e && e.message || e)); workerPromise = null; },
+      errorHandler: (e) => {
+        const msg = (e && e.message) || String(e || '');
+        // tesseract calls this for an unreadable image too, not just a broken
+        // worker. Dropping the worker then leaked its memory (~57 MB a time).
+        if (/attempting to read image|Image format|Error in pixReadMem/i.test(msg)) {
+          console.error('[ocr] could not read that image: ' + msg);
+          return;
+        }
+        console.error('[ocr] worker error: ' + msg);
+        const dying = workerPromise;
+        workerPromise = null;
+        Promise.resolve(dying).then(w => w && w.terminate && w.terminate()).catch(() => {});
+      },
     });
     workerPromise = withTimeout(p, 120000, 'OCR start-up').then(w => { if (firstTime) console.log('[ocr] reading data ready'); return w; })
       .catch(e => { workerPromise = null; throw e; });
@@ -103,7 +116,7 @@ async function variants(file) {
     const base = sharp(file).rotate().grayscale().normalise();
     const meta = await sharp(file).rotate().metadata();
     const width = Math.min(Math.max(meta.width || 0, 1200), 1600);   // big enough to read, small enough to be quick
-    const tmp = path.join(require('os').tmpdir(), 'ocr-' + process.pid + '-' + Date.now());
+    const tmp = path.join(require('os').tmpdir(), 'ocr-' + process.pid + '-' + (++tmpSeq) + '-' + Date.now());
     const clean = tmp + '-a.png';
     await base.clone().resize({ width, withoutEnlargement: false }).sharpen().toFile(clean);
     out.push(clean);
