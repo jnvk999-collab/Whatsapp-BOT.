@@ -192,10 +192,23 @@ function looksLikePhotoFolder(dir) {
 function looksLikeChatExport(file) {
   try { return LINE.test(fs.readFileSync(file, 'utf8').replace(INVISIBLE, '').split(/\r?\n/).slice(0, 40).find(l => LINE.test(l)) || ''); } catch { return false; }
 }
+/** Google Drive for Desktop mounts as a drive letter holding "My Drive". */
+function driveForDesktopRoots() {
+  const out = [];
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  for (const d of ['Google Drive', 'My Drive', 'Google Drive/My Drive']) out.push(path.join(home, d));
+  for (const letter of 'GHIJKLDEF') {
+    out.push(`${letter}:\\My Drive`);
+    out.push(`${letter}:\\Shared drives`);
+  }
+  return out.filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+}
+
 function autoFind() {
   const home = process.env.USERPROFILE || process.env.HOME || '';
   const roots = [__dirname, ...['Desktop', 'Downloads', 'Documents', 'OneDrive/Desktop', 'OneDrive/Documents']
-    .map(d => path.join(home, d))].filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+    .map(d => path.join(home, d)), ...driveForDesktopRoots()]
+    .filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
   const found = new Set();
   const look = (dir, depth) => {
     if (depth > 3 || found.size > 40) return;
