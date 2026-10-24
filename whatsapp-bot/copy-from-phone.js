@@ -300,6 +300,32 @@ child.stdin.end();
 
 let tail = '', samplesShown = false;
 const t0 = Date.now();
+
+// Windows blocks inside its copy call and tells us nothing while it works, so
+// watch the destination folder ourselves. This is the only honest sign of life.
+let lastSeen = -1, quietMinutes = 0, everMoved = false;
+const countLocal = (dir) => {
+  let n = 0;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) { try { n += countLocal(path.join(dir, e.name)); } catch {} }
+    else if (!e.name.startsWith('.')) n++;
+  }
+  return n;
+};
+const watcher = setInterval(() => {
+  let n = 0;
+  try { n = countLocal(DEST); } catch { return; }
+  const mins = Math.round((Date.now() - t0) / 60000);
+  if (n !== lastSeen) {
+    lastSeen = n; everMoved = true; quietMinutes = 0;
+    if (n) process.stdout.write(`\r  ${n} photo(s) copied so far, ${mins} min elapsed        `);
+  } else if (!everMoved) {
+    quietMinutes++;
+    if (quietMinutes === 20) console.log('\n  Still nothing after a minute. Windows is reading the file list on the phone; this part can take several minutes and shows nothing.');
+    if (quietMinutes === 100) console.log('\n  Five minutes with no files. If Windows has not opened its own copy window by now, press Ctrl+C.\n  The chat-export route avoids the cable completely: in WhatsApp open a chat, tap the name,\n  Export chat, Include media, mail it to yourself, unzip on the Desktop, then run: node backfill.js');
+  }
+}, 3000);
+watcher.unref && watcher.unref();
 const show = (chunk) => {
   tail += chunk.toString();
   let i;
@@ -319,7 +345,7 @@ const show = (chunk) => {
     else if (line.startsWith('ALLDONE')) console.log('This folder is already fully copied. Delete .copy-complete inside it if you want to copy again.');
     else if (line.startsWith('READY')) console.log('The phone is reachable and the folder is readable. Run it without --list to copy.');
     else if (line.startsWith('STARTING')) console.log('Asking Windows to copy the whole folder in one go. The first files take a minute to appear.\nWindows may show its own copy window with a time estimate: that is normal, let it run.');
-    else if (line.startsWith('COPIED ')) { const n = +line.slice(7); const el = Math.round((Date.now() - t0) / 1000); process.stdout.write(`\r  ${n} photo(s) copied so far, ${el}s elapsed      `); }
+    else if (line.startsWith('COPIED ')) { /* the folder watcher reports this */ }
     else if (line.startsWith('SLOWPATH')) console.log('  (the phone does not use IMG-date names, reading it file by file instead)');
     else if (line.startsWith('SAMPLE ')) { if (!samplesShown) { console.log('\n  a few of the file names on the phone:'); samplesShown = true; } console.log('    ' + line.slice(7)); }
     else if (line.startsWith('LOSTPHONE')) console.log('\nThe phone disconnected part-way. Unlock it, choose "File transfer" again, and run the same command: it carries on from where it stopped.');
@@ -339,4 +365,14 @@ const show = (chunk) => {
 };
 child.stdout.on('data', show);
 child.stderr.on('data', d => console.error('powershell: ' + d.toString().trim().split('\n')[0]));
-child.on('exit', c => { if (c) console.error('\nStopped with code ' + c + '. Run it again and it will carry on.'); });
+child.on('exit', c => {
+  clearInterval(watcher);
+  let n = 0;
+  try { n = countLocal(DEST); } catch {}
+  const mins = Math.round((Date.now() - t0) / 60000);
+  console.log(`\n${n} photo(s) are now in ${DEST}  (${mins} min)`);
+  if (n) console.log('Make the PDFs with:   node backfill.js --since ' + SINCE + ' --dry');
+  else console.log('Nothing came across. The chat-export route needs no cable:\n  WhatsApp > open a chat > tap the name > Export chat > Include media > mail it to yourself,\n  unzip it on the Desktop, then run:  node backfill.js --since ' + SINCE);
+  if (c) console.error('(PowerShell stopped with code ' + c + '. Running the same command again continues where it left off.)');
+});
+process.on('SIGINT', () => { clearInterval(watcher); try { child.kill(); } catch {} let n = 0; try { n = countLocal(DEST); } catch {} console.log(`\nStopped. ${n} photo(s) copied so far; run the same command again to carry on.`); process.exit(0); });
