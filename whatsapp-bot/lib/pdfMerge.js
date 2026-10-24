@@ -76,7 +76,17 @@ async function mergeFilesToPdf(files, opts = {}) {
     try {
       if (/\.png$/i.test(file) || bytes.slice(0, 8).toString('hex') === '89504e470d0a1a0a') img = await pdf.embedPng(bytes);
       else img = await pdf.embedJpg(bytes);
-    } catch (e) { skipped.push(name); continue; }
+    } catch (e) {
+      // Some cameras and apps write JPEGs the PDF library refuses ("SOI not
+      // found"). Re-save the picture once and try again, rather than quietly
+      // leaving it out of the PDF.
+      try {
+        const sharp = require('sharp');
+        const redone = await sharp(bytes).rotate().jpeg({ quality: 88 }).toBuffer();
+        img = await pdf.embedJpg(redone);
+        console.log(`[pdf] ${name} needed re-saving before it could be added`);
+      } catch (e2) { skipped.push(name); continue; }
+    }
     pagesToAdd.push({ kind: 'image', img });
     items.push({ kind: 'Photo', name, pages: 1, caption });
   }

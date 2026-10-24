@@ -123,6 +123,10 @@ When someone sends a payment-confirmation screenshot (proposal number + amount),
 
 `reminders.txt` (created on first start with the attendance reminders) sends fixed messages to your own chat every day. One per line: `start[-end]  [days]  message`, e.g. `10:00-10:15  Mon-Sat  ⏰ Mark attendance now - before 10:15 AM`. The message goes at the start time; if the laptop was off then, it goes as soon as the bot is up, unless the end time has passed. Edits apply within a minute, no restart. `reminders` in your own chat lists them.
 
+## Catching up on old photos
+
+`node backfill.js <folder>` turns photos you already have into merged PDFs, filed under `merged/<year>/<month>/<day>/` exactly like the live ones, with a row in the monthly Excel register. It reads either a WhatsApp chat export (Chat > More > Export chat > Include media, unzipped) or a plain folder of photos copied off the phone. Options: `--since 2025-11-01`, `--until`, `--gap 30` (minutes of quiet that ends a set), `--min 3`, `--no-ocr`, `--dry`. Nothing is emailed or sent on WhatsApp, numbers in `ignore-list.txt` are skipped, and re-running continues where it stopped.
+
 ## Renewals
 
 Put your renewal sheet in the bot folder as `renewals.xlsx` (columns are found by name: expiry / name / vehicle / policy / mobile). Every day at `RENEWAL_HOUR` the bot sends you, once per policy per milestone, the policies reaching `RENEWAL_MILESTONES` (default 7 days before, 2 days before, and on the day), with phone numbers; `due` or `due 7` in your own chat shows the upcoming list any time. `node scan-policies.js 365` pulls last year's policy PDFs from Gmail, reads policy number, insured, vehicle, period and mobile, and writes `merged/register/Policies.xlsx`; those expiries feed the reminders too.
