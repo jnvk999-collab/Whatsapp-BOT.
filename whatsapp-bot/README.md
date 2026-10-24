@@ -125,6 +125,9 @@ When someone sends a payment-confirmation screenshot (proposal number + amount),
 
 ## Catching up on old photos
 
+`node copy-from-phone.js` copies the WhatsApp photos off a plugged-in Android phone (Windows only) one file at a time, skipping ones already copied, which avoids the freeze Explorer hits on a folder with thousands of photos. `--since 2026-01` limits how far back, `--dest` chooses where, `--list` just reports what it can see. Stop it with Ctrl+C and run it again to continue.
+
+
 `node backfill.js <folder> [more folders]` turns photos you already have into merged PDFs, filed under `merged/<year>/<month>/<day>/` like the live ones, with a row each in the monthly Excel register.
 
 On Android, to keep the sender's name: copy `Internal storage\\Android\\media\\com.whatsapp\\WhatsApp\\Media\\WhatsApp Images` off the phone once, then export each chat **without** media (a small text file) into a second folder, and pass both. The text files say who sent which photo and when; the photos come from the media folder. PDFs are named `<VEHICLE>_<Sender>_<date>.pdf`. Photos no chat file accounts for are still merged, grouped by date and named by vehicle number.
