@@ -404,7 +404,14 @@ async function onMessage(m) {
     if (media) {
       let buf = null;
       for (let attempt = 1; attempt <= 3 && !buf; attempt++) {
-        try { buf = await downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage }); }
+        try {
+          // a cut transfer can hang forever and messages are handled one at a
+          // time, so one stuck download would stop every later photo
+          buf = await Promise.race([
+            downloadMediaMessage(m, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('download timed out after 60s')), 60000)),
+          ]);
+        }
         catch (e) {
           console.error(`[media] download from ${label} failed (try ${attempt} of 3): ${e.message}`);
           if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 4000));

@@ -121,9 +121,13 @@ class PhotoBatcher {
     b.files.push(file);
     b.lastSentAt = Math.max(b.lastSentAt, sentAt);
     if (b.timer) clearTimeout(b.timer);
-    // old messages (catch-up) close quickly; live bursts get the full wait
+    // Old messages (a catch-up after being offline) do not need the full wait,
+    // but the window must still outlast the time it takes to download and save
+    // the NEXT photo, or a burst is split into single files and each one is then
+    // dropped for being below the minimum. 30s, measured from now, not from when
+    // the photo was sent.
     const age = Date.now() - sentAt;
-    b.timer = setTimeout(() => this.flush(chatId), age > this.wait ? 8000 : this.wait);
+    b.timer = setTimeout(() => this.flush(chatId), age > this.wait ? Math.min(30000, this.wait) : this.wait);
     return b.files.length;
   }
   async flush(chatId) {
