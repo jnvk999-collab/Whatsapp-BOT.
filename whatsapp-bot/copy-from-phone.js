@@ -5,6 +5,7 @@
  *   node copy-from-phone.js --since 2026-01
  *   node copy-from-phone.js --dest "C:\Users\dell\Desktop\WhatsApp Images"
  *   node copy-from-phone.js --list          (just show what it can see on the phone)
+ *   node copy-from-phone.js --max 300       (copy 300 photos, then stop; run again for more)
  *
  * Explorer tries to read the whole folder at once and build previews, which is
  * what makes it hang on a phone with thousands of photos. This copies one file
@@ -53,6 +54,7 @@ $ErrorActionPreference = 'Stop'
 $dest = '${DEST.replace(/'/g, "''")}'
 $sinceNum = ${SINCE_NUM}
 $listOnly = $${has('list') ? 'true' : 'false'}
+$maxFiles = ${parseInt(flag('max', '0'), 10) || 0}
 
 $shell = New-Object -ComObject Shell.Application
 function Find-Child($folder, $name) {
@@ -85,11 +87,13 @@ foreach ($dev in $devices) {
       if ($cur -eq $null) { $ok = $false; break }
     }
     if (-not $ok) { continue }
-    $c = 0
-    try { $c = $cur.Items().Count } catch { $c = 0 }
-    if ($c -eq 0) { Start-Sleep -Milliseconds 700; try { $c = $cur.Items().Count } catch { $c = 0 } }
-    Write-Output ("CANDIDATE " + $c + " " + $dev.Name + '/' + ($p -join '/'))
-    if ($c -gt $best) { $best = $c; $src = $cur; $usedPath = ($dev.Name + '/' + ($p -join '/')) }
+    # Asking a phone folder for its total count makes it list every file, which
+    # takes minutes and looks frozen. Just ask whether there is a first item.
+    $empty = $true
+    try { if ($cur.Items().Item(0) -ne $null) { $empty = $false } } catch { $empty = $true }
+    if ($empty) { Start-Sleep -Milliseconds 500; try { if ($cur.Items().Item(0) -ne $null) { $empty = $false } } catch {} }
+    Write-Output ("CANDIDATE " + $(if ($empty) { 'empty' } else { 'has photos' }) + " " + $dev.Name + '/' + ($p -join '/'))
+    if (-not $empty -and $best -eq 0) { $best = 1; $src = $cur; $usedPath = ($dev.Name + '/' + ($p -join '/')) }
   }
 }
 
@@ -109,7 +113,7 @@ if ($src -eq $null -or $best -eq 0) {
       Write-Output ("INSIDE " + $dev.Name + '/' + ($mediaPath -join '/'))
       foreach ($sub in $cur.Items()) {
         $n = ''
-        if ($sub.IsFolder) { try { $n = ' (' + $sub.GetFolder.Items().Count + ' items)' } catch { $n = '' } }
+        if ($sub.IsFolder) { try { if ($sub.GetFolder.Items().Item(0) -ne $null) { $n = ' (has files)' } else { $n = ' (empty)' } } catch { $n = ' (empty)' } }
         Write-Output ("   - " + $sub.Name + $n)
       }
     }
@@ -119,19 +123,22 @@ if ($src -eq $null -or $best -eq 0) {
 }
 Write-Output ("FOUND " + $usedPath)
 
-# One pass over the folder. Growing an array with += copies it every time, which
-# is what makes this crawl on a phone holding thousands of photos.
+# Walk the folder once, reporting as we go, so a slow phone never looks frozen.
+# Never ask for .Count: that makes the phone list everything before saying a word.
 $all = $src.Items()
-Write-Output ("TOTAL " + $all.Count)
-
 $wanted = New-Object System.Collections.ArrayList
+$seen = 0
 foreach ($i in $all) {
+  $seen++
+  if ($seen % 200 -eq 0) { Write-Output ("SCAN " + $seen + " " + $wanted.Count) }
   if ($i.IsFolder) { continue }
   if ($i.Name -notmatch '\\.(jpg|jpeg|png)$') { continue }
   $m = [regex]::Match($i.Name, '(\\d{8})')
   if ($m.Success) { if ([int]$m.Groups[1].Value -lt $sinceNum) { continue } }
   [void]$wanted.Add($i)
+  if ($maxFiles -gt 0 -and $wanted.Count -ge $maxFiles) { Write-Output ("CAPPED " + $maxFiles); break }
 }
+Write-Output ("TOTAL " + $seen)
 Write-Output ("WANTED " + $wanted.Count)
 if ($listOnly) { exit }
 
@@ -175,12 +182,14 @@ const show = (chunk) => {
     if (!line) continue;
     if (line.startsWith('NOPHONE')) console.log('No phone found. Unlock it, and on the phone choose "File transfer" for the USB connection, then run this again.');
     else if (line.startsWith('PHONES ')) console.log('Phone seen: ' + line.slice(7));
-    else if (line.startsWith('CANDIDATE ')) { const [, n, ...rest] = line.split(' '); console.log(`  ${String(n).padStart(6)} file(s) in ${rest.join(' ')}`); }
+    else if (line.startsWith('CANDIDATE ')) { const r = line.slice(10); const i = r.indexOf(' '); console.log(`  ${r.slice(0, i).padEnd(10)} ${r.slice(i + 1)}`); }
     else if (line.startsWith('INSIDE ')) console.log('\nWhat is actually inside ' + line.slice(7) + ':');
     else if (line.startsWith('   - ')) console.log(line);
     else if (line.startsWith('NOFOLDER')) console.log('\nNo WhatsApp photos found on the phone through this connection.\nSend me the list above and I will point it at the right folder.\nIf the list is empty too, the phone is probably in "Charging only" mode: on the phone, tap the USB notification and choose File transfer.');
     else if (line.startsWith('FOUND ')) console.log('Reading ' + line.slice(6) + '\n');
-    else if (line.startsWith('TOTAL ')) console.log(line.slice(6) + ' file(s) on the phone');
+    else if (line.startsWith('SCAN ')) { const [, seen, want] = line.split(' '); process.stdout.write(`\r  reading the phone... ${seen} file(s) seen, ${want} to copy   `); }
+    else if (line.startsWith('CAPPED ')) console.log(`\n  stopping the scan at ${line.slice(7)} files (--max)`);
+    else if (line.startsWith('TOTAL ')) console.log('\n' + line.slice(6) + ' file(s) read on the phone');
     else if (line.startsWith('WANTED ')) console.log(line.slice(7) + ' of them are photos from ' + SINCE + ' onwards\n');
     else if (line.startsWith('SKIP ')) console.log('  ' + line.slice(5) + ' already copied, skipping...');
     else if (line.startsWith('PROGRESS ')) console.log('  ' + line.slice(9));
