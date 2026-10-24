@@ -25,7 +25,18 @@ async function pinToLatestCommit() {
     if (res.ok) { const sha = (await res.text()).trim(); if (/^[0-9a-f]{40}$/.test(sha)) { BASE = `https://raw.githubusercontent.com/${REPO}/${sha}/whatsapp-bot/`; LATEST = sha; console.log('  latest version: ' + sha.slice(0, 7)); } }
   } catch { /* fall back to branch URL */ }
 }
-const FALLBACK = ['bot.js', 'update.js', 'package.json', 'lib/calculator.js', 'lib/intents.js', 'lib/organise.js', 'lib/pdfMerge.js', 'lib/reply.js', 'lib/mailer.js'];
+// Used only when the file list cannot be downloaded. Kept complete on purpose:
+// a short list here is why new tools silently never arrived.
+const FALLBACK = [
+  'bot.js', 'update.js', 'run.js', 'start.js', 'stop.js',
+  'status.js', 'doctor.js', 'backfill.js', 'copy-from-phone.js', 'install-autostart.js',
+  'cloud-setup.sh', 'update-manifest.json', 'package.json', 'README.md', '.env.example',
+  'lib/calculator.js', 'lib/intents.js', 'lib/organise.js', 'lib/pdfMerge.js', 'lib/reply.js',
+  'lib/mailer.js', 'lib/routes.js', 'email-routes.example.txt', 'lib/ignore.js', 'lib/register.js',
+  'lib/commands.js', 'lib/dispatch.js', 'lib/mailwatch.js', 'lib/policy.js', 'lib/requests.js',
+  'lib/renewals.js', 'lib/reminders.js', 'scan-policies.js', 'ignore-list.example.txt', 'lib/vehicle.js',
+  'test/smoke.js', 'setup.bat', 'setup.sh', 'start.bat', 'start.sh',
+];
 
 async function get(f) {
   const res = await fetch(BASE + f + '?t=' + Date.now());
@@ -36,7 +47,16 @@ async function get(f) {
 (async () => {
   await pinToLatestCommit();
   let files = FALLBACK;
-  try { files = JSON.parse((await get('update-manifest.json')).toString()); } catch (e) { console.log('  (manifest unavailable, using built-in list)'); }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const list = JSON.parse((await get('update-manifest.json')).toString());
+      if (Array.isArray(list) && list.length) { files = list; break; }
+      throw new Error('the file list came back empty or was not a list');
+    } catch (e) {
+      if (attempt < 3) { await new Promise(r => setTimeout(r, attempt * 2000)); continue; }
+      console.log(`  could not read the file list (${e.message}); using the built-in list of ${FALLBACK.length} files`);
+    }
+  }
 
   // update the updater first; if it changed, run the new one instead
   if (!process.env.__UPDATER_RERUN) {
