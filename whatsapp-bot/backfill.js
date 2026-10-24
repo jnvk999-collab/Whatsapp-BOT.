@@ -40,6 +40,7 @@ const register = require('./lib/register');
 const ignore = require('./lib/ignore');
 const vehicle = require('./lib/vehicle');
 const { mergeFilesToPdf } = require('./lib/pdfMerge');
+const { spawnSync } = require('child_process');
 
 const IMAGE = /\.(jpe?g|png)$/i;
 const DONE_FILE = path.join(org.MERGED_ROOT, 'backfill-done.json');
@@ -73,15 +74,20 @@ const clean = s => String(s || '').replace(INVISIBLE, '').trim();
 // big folder copied off the phone.
 const photoIndex = new Map();
 const chatFiles = [];
+const scanned = new Set();
 function scan(dir, depth = 0) {
   if (depth > 5) return;
+  // a folder can be reached twice (a zip unpacked inside a folder we also scan)
+  const key = path.resolve(dir).toLowerCase();
+  if (scanned.has(key)) return;
+  scanned.add(key);
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) { scan(p, depth + 1); continue; }
     if (IMAGE.test(e.name)) { if (!photoIndex.has(e.name.toLowerCase())) photoIndex.set(e.name.toLowerCase(), p); continue; }
-    if (/\.txt$/i.test(e.name)) chatFiles.push(p);
+    if (/\.txt$/i.test(e.name) && !chatFiles.some(c => path.basename(c).toLowerCase() === e.name.toLowerCase())) chatFiles.push(p);
   }
 }
 
@@ -218,6 +224,7 @@ function autoFind() {
     for (const e of entries) {
       if (e.isDirectory()) { if (!/^(node_modules|\.|inbox|merged|logs|baileys_auth)/i.test(e.name)) look(path.join(dir, e.name), depth + 1); continue; }
       if (/\.txt$/i.test(e.name) && /chat/i.test(e.name) && looksLikeChatExport(path.join(dir, e.name))) found.add(dir);
+      if (/\.zip$/i.test(e.name) && /whatsapp|chat/i.test(e.name)) found.add(dir);
     }
   };
   roots.forEach(r => look(r, 0));
@@ -246,10 +253,31 @@ function autoFind() {
   let done = {};
   try { done = JSON.parse(fs.readFileSync(DONE_FILE, 'utf8')); } catch {}
 
+  // Unpack any WhatsApp export zips so nobody has to right-click anything.
+  const unpacked = [];
+  for (const f of [...folders]) {
+    const p = path.resolve(f);
+    const zips = /\.zip$/i.test(p) ? [p]
+      : (fs.existsSync(p) && fs.statSync(p).isDirectory()
+        ? fs.readdirSync(p).filter(n => /\.zip$/i.test(n)).map(n => path.join(p, n))
+        : []);
+    for (const zip of zips) {
+      const out = zip.replace(/\.zip$/i, '');
+      if (fs.existsSync(out) && fs.readdirSync(out).length) { unpacked.push(out); continue; }
+      process.stdout.write(`unpacking ${path.basename(zip)} ... `);
+      const r = process.platform === 'win32'
+        ? spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+            `Expand-Archive -LiteralPath '${zip.replace(/'/g, "''")}' -DestinationPath '${out.replace(/'/g, "''")}' -Force`], { stdio: 'pipe' })
+        : spawnSync('unzip', ['-o', '-q', zip, '-d', out], { stdio: 'pipe' });
+      if (r.status === 0 && fs.existsSync(out)) { console.log('done'); unpacked.push(out); }
+      else console.log('could not unpack it; right-click the zip in Windows and choose "Extract All"');
+    }
+  }
+  folders.push(...unpacked);
+
   for (const f of folders) {
     const dir = path.resolve(f);
-    if (!fs.existsSync(dir)) { console.log(`skipped, not found: ${dir}`); continue; }
-    if (/\.zip$/i.test(dir)) { console.log(`skipped: ${path.basename(dir)} is still a zip. Right-click it in Windows, choose "Extract All", then point me at the folder.`); continue; }
+    if (!fs.existsSync(dir) || /\.zip$/i.test(dir)) continue;
     scan(dir);
   }
   console.log(`${photoIndex.size} photo(s) and ${chatFiles.length} exported chat(s) found`);
