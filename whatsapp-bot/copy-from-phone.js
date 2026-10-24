@@ -5,13 +5,14 @@
  *   node copy-from-phone.js --since 2026-01
  *   node copy-from-phone.js --dest "C:\Users\dell\Desktop\WhatsApp Images"
  *   node copy-from-phone.js --list          (just show what it can see on the phone)
- *   node copy-from-phone.js --max 300       (copy 300 more photos, then stop)
  *   node copy-from-phone.js --path "Internal shared storage/WhatsApp/Media/WhatsApp Images"
  *
  * Explorer reads the whole folder and builds a preview of every photo before it
  * shows you anything, which is what makes it hang on a phone holding thousands
- * of them. This copies one file at a time, skips what is already copied, and
- * keeps printing, so you can stop it with Ctrl+C and run it again any time.
+ * of them. This asks Windows for one month of photos at a time, so the transfer
+ * runs at full speed, and it skips any month already copied. There is no limit
+ * on how much it copies. Stop it with Ctrl+C and run it again any time; it
+ * carries on from where it stopped.
  *
  * The phone must be unlocked and plugged in with "File transfer" chosen on it.
  * Windows only: it uses the same phone connection Explorer uses.
@@ -49,6 +50,18 @@ const PATHS = FORCED ? [FORCED.split(/[\\/]+/).filter(Boolean)] : [
   ['Internal shared storage', 'WhatsApp', 'Media', 'WhatsApp Images'],
   ['Phone', 'WhatsApp', 'Media', 'WhatsApp Images'],
 ];
+// Months to copy, newest first, e.g. 202511 .. 202610
+const ymList = (() => {
+  const out = [];
+  const start = new Date(+SINCE.slice(0, 4), +SINCE.slice(5, 7) - 1, 1);
+  const now = new Date();
+  for (let d = new Date(start); d <= now; d.setMonth(d.getMonth() + 1)) {
+    out.push(`${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+})();
+const psMonths = "@('" + ymList.join("','") + "')";
+
 // One statement per candidate. @(@('a','b')) would flatten a single candidate
 // into loose strings; the leading comma keeps each one an array of segments.
 const psList = PATHS.map(p => "$paths += ,@('" + p.map(x => x.replace(/'/g, "''")).join("','") + "')").join('\n  ');
@@ -59,6 +72,7 @@ $dest = '${DEST.replace(/'/g, "''")}'
 $sinceNum = ${SINCE_NUM}
 $maxFiles = ${MAX}
 $listOnly = $${has('list') ? 'true' : 'false'}
+$months = ${psMonths}
 
 $shell = New-Object -ComObject Shell.Application
 trap {
@@ -79,10 +93,14 @@ function Real-Name($item) {
   if (-not $n) { $n = $item.Name }
   return $n
 }
+# Turned around on purpose: name the things that are NOT photos and keep the
+# rest. Demanding a .jpg threw away every file on a phone whose names come back
+# without extensions, and there is no way to list every naming style in advance.
 function Is-Photo($name) {
-  if ($name -match '\\.(jpg|jpeg|png)$') { return $true }
-  if ($name -match '\\.[A-Za-z0-9]{2,4}$') { return $false }   # some other kind of file
-  return ($name -match '^(IMG|PHOTO)[-_]')                     # extension hidden by Windows
+  if ($name -match '\\.(jpg|jpeg|png|webp|heic|bmp|gif)$') { return $true }
+  if ($name -match '\\.(mp4|3gp|mov|avi|mkv|webm|opus|m4a|aac|ogg|amr|mp3|wav|pdf|docx?|xlsx?|pptx?|txt|db|crypt\\d*|zip|rar|apk|vcf|nomedia|thumb|json|xml|log|ini)$') { return $false }
+  if ($name -match '^\\.') { return $false }
+  return $true
 }
 # Does this folder hold actual photos? Look at a few entries only: asking a phone
 # folder for its file count makes it list everything first, which looks frozen.
@@ -148,8 +166,52 @@ if ($src -eq $null) {
 }
 Write-Output ("FOUND " + $usedPath)
 
-# Walk the folder and one level of subfolders (received photos sit at the top,
-# the ones you sent are in Sent). Report as we go so it never looks frozen.
+$destNs = $shell.NameSpace($dest)
+
+# FAST PATH. Handing Windows one month at a time lets it move thousands of
+# photos in a single transfer, instead of this script asking for them one by
+# one, which is what made it crawl. A month already fully copied is skipped.
+function Local-Count($pattern) {
+  return @(Get-ChildItem -LiteralPath $dest -Filter $pattern -File -ErrorAction SilentlyContinue).Count
+}
+$batchWorked = $false
+$totalCopied = 0
+$totalHad = 0
+foreach ($ym in $months) {
+  $pat = 'IMG-' + $ym + '*'
+  $items = $src.Items()
+  $srcN = 0
+  try { $items.Filter(64, $pat); $srcN = $items.Count } catch { $srcN = 0 }
+  if ($srcN -le 0) { continue }
+  $batchWorked = $true
+  $have = Local-Count $pat
+  Write-Output ("MONTH " + $ym + " " + $srcN + " " + $have)
+  if ($listOnly) { $totalHad += $have; continue }
+  if ($have -ge $srcN) { $totalHad += $have; continue }
+  $destNs.CopyHere($items, 20)
+  $last = -1; $stuck = 0
+  while ($true) {
+    Start-Sleep -Seconds 2
+    $now = Local-Count $pat
+    if ($now -ge $srcN) { break }
+    if ($now -eq $last) { $stuck++ } else { $stuck = 0; Write-Output ("MONTHPROG " + $ym + " " + $now + " " + $srcN) }
+    $last = $now
+    if ($stuck -ge 30) { break }        # a minute with nothing new: move on
+  }
+  $final = Local-Count $pat
+  $totalCopied += [Math]::Max(0, $final - $have)
+  $totalHad += $have
+  Write-Output ("MONTHDONE " + $ym + " " + $final + " " + $srcN)
+}
+if ($batchWorked) {
+  if ($listOnly) { Write-Output ("DONE copied=0 already=" + $totalHad + " failed=0"); exit }
+  Write-Output ("DONE copied=" + $totalCopied + " already=" + $totalHad + " failed=0")
+  exit
+}
+Write-Output 'SLOWPATH'
+
+# SLOW PATH, only if the phone does not name its photos IMG-<date>: walk the
+# folder and one level of subfolders, one file at a time.
 $queue = New-Object System.Collections.Queue
 $queue.Enqueue($src)
 $wanted = New-Object System.Collections.ArrayList
@@ -184,7 +246,6 @@ Write-Output ("HAVE " + $already)
 Write-Output ("WANTED " + $wanted.Count)
 if ($listOnly) { exit }
 
-$destNs = $shell.NameSpace($dest)
 $n = 0; $copied = 0; $failed = 0
 foreach ($i in $wanted) {
   $n++
@@ -247,6 +308,10 @@ const show = (chunk) => {
     else if (line.startsWith('FOUND ')) console.log('Reading ' + line.slice(6) + '\n');
     else if (line.startsWith('SCAN ')) { const [, seen, want] = line.split(' '); process.stdout.write(`\r  reading the phone... ${seen} seen, ${want} to copy   `); }
     else if (line.startsWith('CAPPED ')) console.log(`\n  stopping the scan at ${line.slice(7)} new photos (--max)`);
+    else if (line.startsWith('MONTH ')) { const [, ym, n, have] = line.split(' '); const m = ym.slice(4) + '/' + ym.slice(0, 4); console.log(`  ${m}: ${n} photo(s) on the phone` + (+have ? `, ${have} already copied` : '')); }
+    else if (line.startsWith('MONTHPROG ')) { const [, ym, now, all] = line.split(' '); process.stdout.write(`\r    copying ${ym.slice(4)}/${ym.slice(0, 4)}... ${now} of ${all}     `); }
+    else if (line.startsWith('MONTHDONE ')) { const [, ym, now, all] = line.split(' '); console.log(`\r    ${ym.slice(4)}/${ym.slice(0, 4)}: ${now} of ${all} copied            `); }
+    else if (line.startsWith('SLOWPATH')) console.log('  (the phone does not use IMG-date names, reading it file by file instead)');
     else if (line.startsWith('SAMPLE ')) { if (!samplesShown) { console.log('\n  a few of the file names on the phone:'); samplesShown = true; } console.log('    ' + line.slice(7)); }
     else if (line.startsWith('LOSTPHONE')) console.log('\nThe phone disconnected part-way. Unlock it, choose "File transfer" again, and run the same command: it carries on from where it stopped.');
     else if (line.startsWith('ERROR ')) console.log('\nThe phone connection gave an error: ' + line.slice(6) + '\nUnplug, plug back in, choose "File transfer", and run it again.');
