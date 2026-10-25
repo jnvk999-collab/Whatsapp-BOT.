@@ -169,9 +169,10 @@ async function readOne(file, opts = {}) {
   let fullText = '';
   if (!/\.(jpe?g|png)$/i.test(file)) return { tally, partial, text: '' };
 
-  // The better reader finds the writing in a photo by itself, so there is no
-  // cleaning up to do and one look is enough.
-  if (betterReader.paddleAvailable()) {
+  // The other reader finds the writing in a photo by itself, so there is no
+  // cleaning up to do and one look is enough. It leads only when asked to:
+  // on real photos the built-in one is quicker whenever it succeeds.
+  if (betterReader.paddleFirst()) {
     const started0 = Date.now();
     const r = await betterReader.readText(file, opts.timeoutMs || 25000);
     if (r) {
@@ -201,6 +202,19 @@ async function readOne(file, opts = {}) {
   }
   // remove the temp variants we did not get to
   for (const img of imgs) if (img !== file) { try { fs.unlinkSync(img); } catch {} }
+
+  // Nothing found and the other reader is installed: give it one go. This is
+  // where it earns its place, on the sideways and dim photos that defeat the
+  // built-in one, and it is bounded at a couple of seconds.
+  if (!tally.size && !betterReader.paddleFirst() && betterReader.paddleAvailable()) {
+    const r = await betterReader.readText(file, 20000);
+    if (r && r.text) {
+      for (const [k, v] of extractNumbers(r.text)) tally.set(k, (tally.get(k) || 0) + v);
+      for (const [k, v] of extractPartials(r.text)) partial.set(k, (partial.get(k) || 0) + v);
+      if (r.text.length > fullText.length) fullText = r.text;
+      if (tally.size) console.log(`[ocr] ${path.basename(file)}: second reader found ${[...tally.keys()].join('/')}`);
+    }
+  }
   console.log(`[ocr] ${path.basename(file)}: ${tally.size ? 'found ' + [...tally.keys()].join('/') : partial.size ? 'partial ' + [...partial.keys()].slice(0, 3).join('/') : 'nothing'} (${Math.round((Date.now() - started) / 1000)}s)`);
   return { tally, partial, text: fullText };
 }

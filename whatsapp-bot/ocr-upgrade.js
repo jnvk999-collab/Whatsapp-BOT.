@@ -3,11 +3,13 @@
  *
  *   node ocr-upgrade.js            install it, then time both readers
  *   node ocr-upgrade.js --test     time both readers, install nothing
+ *   node ocr-upgrade.js --test --photos=10   test on more of your photos
  *
- * The better reader is PaddleOCR v4 running through onnxruntime. It finds the
- * writing in a photo by itself, so a sideways or badly lit picture no longer
- * needs four cleaned-up attempts. It is a one-off download of about 150 MB and
- * then works offline for good. The old reader stays as a fallback.
+ * The second reader is PaddleOCR v4 running through onnxruntime. It finds the
+ * writing in a photo by itself, so it reads sideways and badly lit pictures the
+ * built-in reader gives up on. One-off download of about 150 MB, offline after
+ * that. It does NOT replace the built-in reader: that one goes first because it
+ * is quicker on photos it can read, and this one is asked when it finds nothing.
  *
  * It times both on your own photos (the newest ones in the inbox, the merged
  * folder, or Desktop\WhatsApp Images), so the numbers below are yours, not mine.
@@ -19,6 +21,12 @@ const { spawnSync } = require('child_process');
 const has = n => process.argv.includes('--' + n);
 const home = process.env.USERPROFILE || process.env.HOME || '.';
 
+/** 20251115 out of IMG-20251115-WA0012.jpg, so recent photos can be preferred. */
+function dateKey(name) {
+  const m = String(name).match(/(20\d{6})/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 function samplePhotos(n = 4) {
   const roots = [
     path.join(home, 'Desktop', 'WhatsApp Images'),
@@ -27,18 +35,21 @@ function samplePhotos(n = 4) {
   ];
   const found = [];
   const walk = (dir, depth) => {
-    if (depth > 3 || found.length >= 60) return;
+    if (depth > 3 || found.length >= 400) return;
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (found.length >= 60) return;
+      if (found.length >= 400) return;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { walk(p, depth + 1); continue; }
       if (/\.(jpe?g|png)$/i.test(e.name)) { try { if (fs.statSync(p).size > 40000) found.push(p); } catch {} }
     }
   };
   roots.forEach(r => walk(r, 0));
-  return found.slice(-n);                 // the newest ones we came across
+  // Newest first by the date in the file name: a photo from this year is far
+  // more likely to be a registration book than one from five years ago.
+  found.sort((a, b) => dateKey(path.basename(b)) - dateKey(path.basename(a)));
+  return found.slice(0, n);
 }
 
 async function timeReader(files, useNew) {
@@ -87,7 +98,7 @@ async function timeReader(files, useNew) {
     console.log('\nInstalled.\n');
   }
 
-  const files = samplePhotos(4);
+  const files = samplePhotos(parseInt((process.argv.find(a => a.startsWith('--photos=')) || '--photos=6').split('=')[1], 10) || 6);
   if (!files.length) {
     console.log('No photos of your own to test with yet, so no timings. It will be used from the next run.');
     return;
@@ -109,10 +120,10 @@ async function timeReader(files, useNew) {
   console.log(`\n  total:        ${(neu.total / 1000).toFixed(1)}s   vs   ${(old.total / 1000).toFixed(1)}s`);
   console.log(`  slowest one:  ${(worst(neu) / 1000).toFixed(1)}s   vs   ${(worst(old) / 1000).toFixed(1)}s`);
   console.log(`  numbers read: ${found(neu)} of ${files.length}   vs   ${found(old)} of ${files.length}`);
-  console.log('\nWhat to make of it: on clean, straight photos the built-in reader is often quicker.');
-  console.log('Its problem is the bad ones, where it tries four different ways and can take over a');
-  console.log('minute for nothing. The other reader looks once, so it is steady at a second or two');
-  console.log('whatever the photo, and it copes better with sideways or dim pictures.');
-  console.log('\nPick the built-in one any time by putting OCR_ENGINE=tesseract in .env.');
+  console.log('\nHow they are used: the built-in reader goes first, because on photos it can read');
+  console.log('it is the quicker of the two. The other one is only asked when the built-in reader');
+  console.log('comes back with nothing, which is where it earns its place: a sideways or dim photo');
+  console.log('it reads in about two seconds. So you get the quick case quick and the hard case read.');
+  console.log('\nOCR_ENGINE=paddle in .env makes the other one lead; OCR_ENGINE=tesseract turns it off.');
   console.log('For the whole backfill:   node backfill.js --since 2025-11-01');
 })().catch(e => { console.error('Failed: ' + e.message); process.exit(1); });

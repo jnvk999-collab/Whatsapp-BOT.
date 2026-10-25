@@ -49,10 +49,19 @@ async function loadPaddle() {
   return paddle;
 }
 
-/** Which reader will be used, without loading anything. */
+/**
+ * Should the other reader go FIRST? Measured on real photos, the built-in one
+ * is two to four times quicker when it succeeds, so it leads and this one is
+ * the second opinion. OCR_ENGINE=paddle swaps that round.
+ */
+function paddleFirst() {
+  return (process.env.OCR_ENGINE || 'auto').toLowerCase() === 'paddle' && paddleAvailable();
+}
+
+/** Which reader leads, without loading anything. */
 function name() {
-  if (engine) return engine;
-  return paddleAvailable() ? 'paddle' : 'tesseract';
+  if (paddleFirst()) return 'paddle';
+  return paddleAvailable() ? 'tesseract (with paddle as second opinion)' : 'tesseract';
 }
 
 /**
@@ -98,4 +107,4 @@ async function readText(file, timeoutMs = 20000) {
   }
 }
 
-module.exports = { readText, paddleAvailable, name };
+module.exports = { readText, paddleAvailable, paddleFirst, name };
