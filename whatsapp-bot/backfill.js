@@ -26,6 +26,10 @@
  *   --gap 30             minutes of quiet that ends one set (default 30)
  *   --min 3              photos needed before a PDF is made (default: MIN_PHOTOS or 3)
  *   --only-numbers       skip group chats, keep one-to-one chats only
+ *   --maxset 20          most photos in one PDF (a bigger run is split)
+ *   --ocr-photos 4       how many photos of a set to try reading
+ *   --ocr-parallel 3     how many photos to read at the same time
+ *   --ocr-full           read every photo every way (slow, slightly better)
  *   --no-ocr             skip reading vehicle numbers (much faster)
  *   --dry                list what would be made, write nothing
  *
@@ -61,6 +65,10 @@ const UNTIL = flag('until') ? new Date(flag('until') + 'T23:59:59') : new Date()
 const GAP = parseFloat(flag('gap', '30')) * 60000;
 const MIN = parseInt(flag('min', process.env.MIN_PHOTOS || '3'), 10);
 const OCR = !has('no-ocr');
+const OCR_PHOTOS = parseInt(flag('ocr-photos', '4'), 10);          // how many photos of a set to try
+const OCR_PARALLEL = parseInt(flag('ocr-parallel', String(Math.max(2, Math.min(4, (require('os').cpus() || []).length - 1)))), 10);
+const MAX_SET = parseInt(flag('maxset', '20'), 10);                // a PDF of 113 photos is several customers
+const FULL_OCR = has('ocr-full');
 const DRY = has('dry');
 const ONLY_NUMBERS = has('only-numbers');
 
@@ -157,7 +165,16 @@ function unclaimedPhotos() {
   const out = [];
   for (const file of photoIndex.values()) {
     if (claimed.has(file)) continue;
-    const at = dateFromName(path.basename(file)) || fs.statSync(file).mtime;
+    let at = dateFromName(path.basename(file));
+    try {
+      const mt = fs.statSync(file).mtime;
+      // The name gives the day; it carries no clock time, so everything would
+      // land at noon and a whole day would clump together. Borrow the time of
+      // day from the file itself when it agrees about the date.
+      if (!at) at = mt;
+      else if (isoDate(mt) === isoDate(at)) at = mt;
+    } catch {}
+    if (!at) continue;
     out.push({ at, sender: '', chat: '', file });
   }
   return out;
@@ -171,9 +188,14 @@ function intoSets(items) {
   for (const it of items) {
     const key = (it.chat || '') + '|' + (it.sender || '');
     const cur = open.get(key);
+    // Photos straight off the phone carry no sender, so a whole day in one chat
+    // would otherwise become a single PDF of a hundred photos from a dozen
+    // customers. Those get a tighter gap and a size cap.
+    const gap = it.sender ? GAP : Math.min(GAP, 10 * 60000);
     const sameRun = cur
+      && cur.files.length < MAX_SET
       && isoDate(cur.files[cur.files.length - 1].at) === isoDate(it.at)
-      && it.at - cur.files[cur.files.length - 1].at <= GAP;
+      && it.at - cur.files[cur.files.length - 1].at <= gap;
     if (sameRun) { cur.files.push(it); continue; }
     const fresh = { at: it.at, sender: it.sender, chat: it.chat, files: [it] };
     sets.push(fresh);
@@ -250,6 +272,11 @@ function autoFind() {
     console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^\/\*\*?/, '').replace(/^ \* ?/gm, ''));
     process.exit(0);
   }
+  if (OCR) {
+    vehicle.setFast(!FULL_OCR);
+    vehicle.setPool(OCR_PARALLEL);
+    if (!FULL_OCR) console.log(`Reading vehicle numbers ${OCR_PARALLEL} photos at a time, up to ${OCR_PHOTOS} per set, stopping at the first number found.`);
+  }
   let done = {};
   try { done = JSON.parse(fs.readFileSync(DONE_FILE, 'utf8')); } catch {}
 
@@ -321,15 +348,24 @@ function autoFind() {
 
     let veh = null;
     if (OCR) {
+      // Read a few photos at once and stop the moment one gives a full number.
+      // Reading every photo of every set is what made this take all night.
       const reads = [];
-      for (const f of s.files.slice(0, 6)) reads.push(await vehicle.readOne(f.file).catch(() => null));
-      try { const d = vehicle.decide(reads.filter(Boolean)); veh = (d && (d.number || d.partial)) || null; } catch {}
+      const candidates = s.files.slice(0, OCR_PHOTOS);
+      for (let k = 0; k < candidates.length; k += OCR_PARALLEL) {
+        const chunk = candidates.slice(k, k + OCR_PARALLEL);
+        const got = await Promise.all(chunk.map(f => vehicle.readOne(f.file).catch(() => null)));
+        reads.push(...got.filter(Boolean));
+        if (got.some(r => r && r.tally && r.tally.size)) break;
+      }
+      try { const d = vehicle.decide(reads); veh = (d && (d.number || d.partial)) || null; } catch {}
     }
     const hhmm = `${pad(s.at.getHours())}${pad(s.at.getMinutes())}`;
     const who = safe(s.sender || s.chat);
     const stem = [veh && safe(veh), who || (veh ? '' : 'Photos'), date].filter(Boolean).join('_');
     let fname = `${stem}.pdf`;
-    if (org.archiveExists(fname, s.at)) fname = fname.replace(/\.pdf$/, `_${hhmm}.pdf`);
+    if (org.archiveExists(fname, s.at)) fname = `${stem}_${hhmm}.pdf`;
+    for (let k = 2; org.archiveExists(fname, s.at); k++) fname = `${stem}_${hhmm}_${k}.pdf`;
 
     if (DRY) { console.log(`${head}  ->  ${fname}${veh ? '' : '   (no vehicle number read)'}`); made++; continue; }
     try {

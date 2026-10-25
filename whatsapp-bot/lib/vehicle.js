@@ -63,8 +63,21 @@ function withTimeout(promise, ms, what) {
 }
 
 let workerPromise = null;
-let tmpSeq = 0;      // keeps two photos in the same millisecond from sharing a temp name
+let tmpSeq = 0;
+// Fast mode: two looks at a photo instead of four, and shorter timeouts. For
+// the backfill, where thousands of photos make a seventy-second read per photo
+// impossible. The picture itself is prepared exactly as before, so a number
+// that could be read still is.
+let fastMode = false;
+function setFast(v) { fastMode = !!v; }
+let poolSize = 1, pool = [], poolIdx = 0;
+/** Read this many photos at the same time, one reader each. */
+function setPool(n) { poolSize = Math.max(1, Math.min(8, parseInt(n, 10) || 1)); }      // keeps two photos in the same millisecond from sharing a temp name
 async function getWorker() {
+  if (poolSize > 1) {
+    while (pool.length < poolSize) pool.push(newWorker());
+    return pool[poolIdx++ % pool.length];
+  }
   if (!workerPromise) {
     const { createWorker } = require('tesseract.js');
     const cache = path.resolve(__dirname, '..', '.tessdata');
@@ -87,8 +100,18 @@ async function getWorker() {
         Promise.resolve(dying).then(w => w && w.terminate && w.terminate()).catch(() => {});
       },
     });
-    workerPromise = withTimeout(p, 120000, 'OCR start-up').then(w => { if (firstTime) console.log('[ocr] reading data ready'); return w; })
-      .catch(e => { workerPromise = null; throw e; });
+    workerPromise = withTimeout(p, 120000, 'OCR start-up').then(async w => {
+      if (firstTime) console.log('[ocr] reading data ready');
+      if (fastMode) {
+        try {
+          await w.setParameters({
+            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -',
+            tessedit_pageseg_mode: '11',          // sparse text: much quicker than a full page
+          });
+        } catch {}
+      }
+      return w;
+    }).catch(e => { workerPromise = null; throw e; });
   }
   return workerPromise;
 }
@@ -115,11 +138,14 @@ async function variants(file) {
   try {
     const base = sharp(file).rotate().grayscale().normalise();
     const meta = await sharp(file).rotate().metadata();
-    const width = Math.min(Math.max(meta.width || 0, 1200), 1600);   // big enough to read, small enough to be quick
+    const width = fastMode
+      ? Math.min(Math.max(meta.width || 0, 900), 1100)
+      : Math.min(Math.max(meta.width || 0, 1200), 1600);   // big enough to read, small enough to be quick
     const tmp = path.join(require('os').tmpdir(), 'ocr-' + process.pid + '-' + (++tmpSeq) + '-' + Date.now());
     const clean = tmp + '-a.png';
     await base.clone().resize({ width, withoutEnlargement: false }).sharpen().toFile(clean);
     out.push(clean);
+    if (fastMode) return out;          // one look only
     const thresh = tmp + '-b.png';
     await base.clone().resize({ width }).threshold(150).toFile(thresh);
     out.push(thresh);
@@ -142,12 +168,12 @@ async function readOne(file, opts = {}) {
   if (!/\.(jpe?g|png)$/i.test(file)) return { tally, partial, text: '' };
   try { if (fs.statSync(file).size < 1500) return { tally, partial, text: '' }; } catch { return { tally, partial, text: '' }; }
   const started = Date.now();
-  const deadline = started + (opts.budgetMs || 60000);
+  const deadline = started + (opts.budgetMs || (fastMode ? 12000 : 60000));
   const worker = await getWorker();
   const imgs = await variants(file);
   for (const img of imgs) {
     try {
-      const { data } = await recognize(worker, img, 40000);
+      const { data } = await recognize(worker, img, fastMode ? 9000 : 40000);
       const text = data.text || '';
       if (text.length > fullText.length) fullText = text;
       for (const [k, v] of extractNumbers(text)) tally.set(k, (tally.get(k) || 0) + v);
@@ -195,6 +221,18 @@ async function findVehicleNumber(imageFiles, opts = {}) {
   return decide(results);
 }
 
-async function close() { if (workerPromise) { try { (await workerPromise).terminate(); } catch {} workerPromise = null; } }
+/** One more reader for the pool, built like the single one. */
+function newWorker() {
+  const { createWorker } = require('tesseract.js');
+  const cache = path.resolve(__dirname, '..', '.tessdata');
+  fs.mkdirSync(cache, { recursive: true });
+  return withTimeout(createWorker('eng', 1, { cachePath: cache, logger: () => {}, errorHandler: () => {} }), 120000, 'OCR start-up');
+}
 
-module.exports = { readOne, decide, findVehicleNumber, extractNumbers, extractPartials, warmUp, close };
+async function close() {
+  if (workerPromise) { try { (await workerPromise).terminate(); } catch {} workerPromise = null; }
+  const old = pool; pool = []; poolIdx = 0;
+  for (const w of old) { try { (await w).terminate(); } catch {} }
+}
+
+module.exports = { readOne, decide, findVehicleNumber, extractNumbers, extractPartials, warmUp, close, setFast, setPool };
