@@ -282,7 +282,24 @@ function autoFind() {
   if (OCR) {
     vehicle.setFast(!FULL_OCR);
     vehicle.setPool(OCR_PARALLEL);
-    if (!FULL_OCR) console.log(`Reading vehicle numbers ${OCR_PARALLEL} photos at a time, up to ${OCR_PHOTOS} per set, stopping at the first number found.`);
+    const reader = require('./lib/ocr');
+    const good = reader.paddleFirst();
+    console.log('Vehicle numbers read by: ' + reader.name());
+    if (!good) {
+      console.log('  The faster, more accurate reader is NOT being used.');
+      if ((process.env.OCR_ENGINE || '').toLowerCase() === 'tesseract') console.log('  Reason: OCR_ENGINE=tesseract in your .env. Remove that line to use it.');
+      else console.log('  Reason: it is not installed. Install it with:  node ocr-upgrade.js');
+    }
+    // Reading again with the very reader that already found nothing is days of
+    // work for almost no names. Refuse rather than let it run.
+    if (RENAME && !good) {
+      console.log('\nStopping. --rename only re-reads the PDFs that have no vehicle number, and those');
+      console.log('are exactly the photos this reader already failed on, so it would take days and');
+      console.log('change almost nothing. Fix the line above first, then run --rename again.');
+      console.log('To go ahead anyway: add --force');
+      if (!has('force')) return;
+    }
+    if (!FULL_OCR) console.log(`Reading ${OCR_PARALLEL} photos at a time, up to ${OCR_PHOTOS} per set, stopping at the first number found.\n`);
   }
   let done = {};
   try { done = JSON.parse(fs.readFileSync(DONE_FILE, 'utf8')); } catch {}

@@ -82,7 +82,15 @@ function reach(host, port = 443, ms = 6000) {
     }
   }
 
-  // 5. settings that decide what happens to photos
+  // 5. which reader is doing the vehicle numbers
+  try {
+    const reader = require('./lib/ocr');
+    if (reader.paddleFirst()) pass('vehicle numbers read by PaddleOCR (about a second a photo)');
+    else if ((process.env.OCR_ENGINE || '').toLowerCase() === 'tesseract') caution('OCR_ENGINE=tesseract in .env, so the slow reader is in use. Remove that line.');
+    else caution('the faster number reader is not installed. Install it with:  node ocr-upgrade.js');
+  } catch {}
+
+  // 6. settings that decide what happens to photos
   const minPhotos = parseInt(process.env.MIN_PHOTOS || '3', 10);
   pass(`a set needs at least ${minPhotos} photos before a PDF is made`);
   pass(`merge waits ${process.env.MERGE_WAIT_SECONDS || 45}s after the last photo`);
