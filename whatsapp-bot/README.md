@@ -140,7 +140,7 @@ On Android, to keep the sender's name: copy `Internal storage\\Android\\media\\c
 
 On iPhone, export each chat with media, unzip, and pass the unzipped folders.
 
-Options: `--redo` (delete the PDFs an earlier backfill made and build them again), `--undo` (delete and stop), `--since 2025-11-01`, `--until`, `--gap 30` (minutes of quiet that ends a set), `--min 3`, `--only-numbers` (skip group chats), `--no-ocr`, `--dry`. Nothing is emailed or sent on WhatsApp, names and numbers in `ignore-list.txt` are skipped entirely, and re-running continues where it stopped.
+Options: `--rename` (keep the PDFs, read the numbers again only for the ones named by date, and rename those), `--redo` (delete the PDFs an earlier backfill made and build them again), `--undo` (delete and stop), `--since 2025-11-01`, `--until`, `--gap 30` (minutes of quiet that ends a set), `--min 3`, `--only-numbers` (skip group chats), `--no-ocr`, `--dry`. Nothing is emailed or sent on WhatsApp, names and numbers in `ignore-list.txt` are skipped entirely, and re-running continues where it stopped.
 
 ## Renewals
 

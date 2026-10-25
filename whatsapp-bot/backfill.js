@@ -31,6 +31,8 @@
  *   --ocr-parallel 3     how many photos to read at the same time
  *   --ocr-full           read every photo every way (slow, slightly better)
  *   --no-ocr             skip reading vehicle numbers (much faster)
+ *   --rename             keep the PDFs, just read the numbers again for the ones
+ *                        named only by date, and rename those
  *   --redo               delete the PDFs an earlier backfill made, then build again
  *   --undo               delete them and stop
  *   --dry                list what would be made, write nothing
@@ -71,6 +73,9 @@ const OCR_PHOTOS = parseInt(flag('ocr-photos', '4'), 10);          // how many p
 const OCR_PARALLEL = parseInt(flag('ocr-parallel', String(Math.max(2, Math.min(4, (require('os').cpus() || []).length - 1)))), 10);
 const MAX_SET = parseInt(flag('maxset', '20'), 10);                // a PDF of 113 photos is several customers
 const FULL_OCR = has('ocr-full');
+const RENAME = has('rename');
+let renamed = 0, renameTried = 0;
+const renamedRows = [];
 const DRY = has('dry');
 const ONLY_NUMBERS = has('only-numbers');
 
@@ -376,6 +381,40 @@ function autoFind() {
   for (const [i, s] of sets.entries()) {
     const date = isoDate(s.at);
     const key = `${date}|${s.chat || ''}|${s.sender || 'phone'}|${path.basename(s.files[0].file)}|${s.files.length}`;
+
+    // --rename: the PDFs are already built. Look again only at the ones whose
+    // name has no vehicle number in it, read them with the current reader, and
+    // rename the file and its register row. No merging, no rebuilding.
+    if (RENAME) {
+      const existing = done[key];
+      if (!existing || !fs.existsSync(existing)) { continue; }
+      if (!/^[A-Z]{2}[0-9]/.test(path.basename(existing))) {
+        renameTried++;
+        let found = null;
+        for (let k = 0; k < Math.min(s.files.length, OCR_PHOTOS) && !found; k += OCR_PARALLEL) {
+          const chunk = s.files.slice(k, k + OCR_PARALLEL);
+          const got = await Promise.all(chunk.map(f => vehicle.readOne(f.file).catch(() => null)));
+          try { const d = vehicle.decide(got.filter(Boolean)); found = (d && d.number) || null; } catch {}
+        }
+        if (found) {
+          const who2 = safe(s.sender || s.chat);
+          const stem2 = [safe(found), who2, date].filter(Boolean).join('_');
+          let nf = `${stem2}.pdf`;
+          if (org.archiveExists(nf, s.at)) nf = `${stem2}_${pad(s.at.getHours())}${pad(s.at.getMinutes())}.pdf`;
+          for (let k = 2; org.archiveExists(nf, s.at); k++) nf = `${stem2}_${pad(s.at.getHours())}${pad(s.at.getMinutes())}_${k}.pdf`;
+          const target = path.join(path.dirname(existing), nf);
+          try {
+            fs.renameSync(existing, target);
+            done[key] = target;
+            fs.writeFileSync(DONE_FILE, JSON.stringify(done));
+            renamedRows.push({ from: existing, to: target, vehicle: found, date });
+            renamed++;
+            console.log(`  ${path.basename(existing)}  ->  ${nf}`);
+          } catch (e) { console.log(`  could not rename ${path.basename(existing)}: ${e.message}`); }
+        }
+      }
+      continue;
+    }
     if (done[key]) { already++; continue; }
     const whoFor = s.sender || s.chat || 'from the phone';
     const head = `[${i + 1}/${sets.length}] ${date} ${whoFor} - ${s.files.length} photos`;
@@ -429,6 +468,31 @@ function autoFind() {
     }
   }
   try { await vehicle.close(); } catch {}
+
+  if (RENAME) {
+    if (renamedRows.length) {
+      try {
+        const rows = register.readAll();
+        const byFile = new Map(renamedRows.map(r => [r.from, r]));
+        const months = new Set();
+        let touched = 0;
+        for (const row of rows) {
+          const hit = byFile.get(row.file);
+          if (!hit) continue;
+          row.file = hit.to; row.vehicle = hit.vehicle; months.add(String(row.date).slice(0, 7)); touched++;
+        }
+        if (touched) {
+          fs.writeFileSync(register.JSONL(), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+          for (const ym of months) await register.rebuildMonth(ym).catch(() => {});
+          console.log(`\nThe register was updated for ${touched} of them.`);
+        }
+      } catch (e) { console.log('Could not update the register: ' + e.message); }
+    }
+    console.log(`\nDone. ${renameTried} PDF(s) had no vehicle number; ${renamed} now do.`);
+    console.log(`The other ${renameTried - renamed} stay as they are: nothing readable in those photos.`);
+    return;
+  }
+
   console.log(`\nDone. ${made} PDF(s) made, ${already} already there, ${failed} failed.`);
   console.log(`They are in ${org.MERGED_ROOT}, filed by year, month and day, with a row each in the monthly Excel register.`);
 })().catch(e => { console.error('Backfill failed: ' + e.message); process.exit(1); });
