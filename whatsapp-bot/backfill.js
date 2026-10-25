@@ -31,6 +31,8 @@
  *   --ocr-parallel 3     how many photos to read at the same time
  *   --ocr-full           read every photo every way (slow, slightly better)
  *   --no-ocr             skip reading vehicle numbers (much faster)
+ *   --redo               delete the PDFs an earlier backfill made, then build again
+ *   --undo               delete them and stop
  *   --dry                list what would be made, write nothing
  *
  * Nothing is emailed or sent on WhatsApp. Names and numbers in ignore-list.txt
@@ -279,6 +281,38 @@ function autoFind() {
   }
   let done = {};
   try { done = JSON.parse(fs.readFileSync(DONE_FILE, 'utf8')); } catch {}
+
+  // --redo / --undo: remove what an earlier backfill made, so it can be rebuilt.
+  // Only what THIS tool created is touched: the list of files it wrote, and the
+  // register rows it marked as its own. PDFs from the live bot are left alone.
+  if (has('redo') || has('undo')) {
+    const files = Object.values(done).filter(f => typeof f === 'string');
+    let gone = 0;
+    for (const f of files) { try { if (fs.existsSync(f)) { fs.unlinkSync(f); gone++; } } catch {} }
+    let rows = [], kept = [], months = new Set();
+    try { rows = register.readAll(); } catch {}
+    for (const r of rows) { if (r && r.source === 'backfill') months.add(String(r.date || '').slice(0, 7)); else kept.push(r); }
+    if (rows.length !== kept.length) {
+      try {
+        fs.writeFileSync(register.JSONL(), kept.map(r => JSON.stringify(r)).join('\n') + (kept.length ? '\n' : ''));
+        for (const ym of months) { if (ym) await register.rebuildMonth(ym).catch(() => {}); }
+      } catch (e) { console.log('  could not tidy the register: ' + e.message); }
+    }
+    try { fs.unlinkSync(DONE_FILE); } catch {}
+    done = {};
+    // drop any now-empty day folders left behind
+    const prune = (dir, depth) => {
+      if (depth > 3) return;
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) if (e.isDirectory()) prune(path.join(dir, e.name), depth + 1);
+      try { if (!fs.readdirSync(dir).length && dir !== org.MERGED_ROOT) fs.rmdirSync(dir); } catch {}
+    };
+    prune(org.MERGED_ROOT, 0);
+    console.log(`Removed ${gone} PDF(s) made by an earlier backfill and ${rows.length - kept.length} register row(s).`);
+    if (has('undo')) { console.log('Nothing else done (--undo).'); return; }
+    console.log('');
+  }
 
   // Unpack any WhatsApp export zips so nobody has to right-click anything.
   const unpacked = [];
