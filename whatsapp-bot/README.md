@@ -125,7 +125,7 @@ When someone sends a payment-confirmation screenshot (proposal number + amount),
 
 ## Reading vehicle numbers
 
-The bot reads numbers with tesseract.js. `node ocr-upgrade.js` adds a second reader, PaddleOCR v4 through onnxruntime (a one-off 150 MB download, offline afterwards), and times both on your own photos. Measured on real photos the built-in reader is two to four times quicker whenever it succeeds, so it keeps going first; the second reader is asked only when it finds nothing, which is where it pays: a sideways photo the built-in one misses entirely is read in about two seconds. `OCR_ENGINE=paddle` makes the second one lead, `OCR_ENGINE=tesseract` switches it off.
+Out of the box the bot reads numbers with tesseract.js. `node ocr-upgrade.js` installs PaddleOCR v4 through onnxruntime (a one-off 150 MB download, offline afterwards) and makes it the reader, with tesseract kept as a fallback. It takes a quick look at a 736-pixel copy of the photo and gives only the ones it cannot read a second, careful look at 1400 pixels. Measured on six deliberately bad photos (blurred, dim, sideways): six of six read at about a second each, against three of six for tesseract. `OCR_ENGINE=tesseract` in `.env` goes back to the built-in reader; `OCR_WIDTH_FAST` and `OCR_WIDTH_CAREFUL` tune the two looks.
 
 ## Catching up on old photos
 

@@ -174,11 +174,19 @@ async function readOne(file, opts = {}) {
   // on real photos the built-in one is quicker whenever it succeeds.
   if (betterReader.paddleFirst()) {
     const started0 = Date.now();
-    const r = await betterReader.readText(file, opts.timeoutMs || 25000);
+    // A quick look first. Only the photos it cannot read get the slower,
+    // more careful look, which is what keeps the average near a second.
+    let r = await betterReader.readText(file, opts.timeoutMs || 25000);
+    let careful = false;
     if (r) {
       for (const [k, v] of extractNumbers(r.text)) tally.set(k, (tally.get(k) || 0) + v);
+      if (!tally.size) {
+        careful = true;
+        const r2 = await betterReader.readText(file, opts.timeoutMs || 30000, { careful: true });
+        if (r2) { r = r2; for (const [k, v] of extractNumbers(r2.text)) tally.set(k, (tally.get(k) || 0) + v); }
+      }
       for (const [k, v] of extractPartials(r.text)) partial.set(k, (partial.get(k) || 0) + v);
-      console.log(`[ocr] ${path.basename(file)}: ${tally.size ? 'found ' + [...tally.keys()].join('/') : partial.size ? 'partial ' + [...partial.keys()].slice(0, 3).join('/') : 'nothing'} (${Math.round((Date.now() - started0) / 1000)}s)`);
+      console.log(`[ocr] ${path.basename(file)}: ${tally.size ? 'found ' + [...tally.keys()].join('/') : partial.size ? 'partial ' + [...partial.keys()].slice(0, 3).join('/') : 'nothing'} (${Math.round((Date.now() - started0) / 1000)}s${careful ? ', two looks' : ''})`);
       return { tally, partial, text: r.text };
     }
   }

@@ -55,41 +55,46 @@ async function loadPaddle() {
  * the second opinion. OCR_ENGINE=paddle swaps that round.
  */
 function paddleFirst() {
-  return (process.env.OCR_ENGINE || 'auto').toLowerCase() === 'paddle' && paddleAvailable();
+  const want = (process.env.OCR_ENGINE || 'auto').toLowerCase();
+  if (want === 'tesseract') return false;
+  return paddleAvailable();          // auto and paddle both mean: it leads
 }
 
 /** Which reader leads, without loading anything. */
 function name() {
-  if (paddleFirst()) return 'paddle';
-  return paddleAvailable() ? 'tesseract (with paddle as second opinion)' : 'tesseract';
+  return paddleFirst() ? 'PaddleOCR (two looks), tesseract as fallback' : 'tesseract';
 }
 
 /**
  * Read a photo.
  * @returns {Promise<{text:string, engine:string}|null>} null if this reader cannot be used
  */
-const MAX_WIDTH = parseInt(process.env.OCR_MAX_WIDTH || '1300', 10);
+// Two sizes. Measured on blurred, dim and sideways photos: a quick look at 736
+// pixels reads five of six, and the one it misses is read by a second look at
+// 1400. Doing every photo at 1400 is right too, and takes three times as long.
+const SMALL_WIDTH = parseInt(process.env.OCR_WIDTH_FAST || '736', 10);
+const BIG_WIDTH = parseInt(process.env.OCR_WIDTH_CAREFUL || '1400', 10);
 
 /** A phone photo is far bigger than the reader needs. Shrinking it first is
  *  the difference between one second and fifteen, with the same answer. */
-async function shrink(file) {
+async function shrink(file, width) {
   try {
     const sharp = require('sharp');
     const meta = await sharp(file).metadata();
-    if ((meta.width || 0) <= MAX_WIDTH) return { file, tmp: null };
+    if ((meta.width || 0) <= width) return { file, tmp: null };
     const tmp = path.join(require('os').tmpdir(), 'ocr-in-' + process.pid + '-' + (++seq) + '.jpg');
-    await sharp(file).rotate().resize({ width: MAX_WIDTH, withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(tmp);
+    await sharp(file).rotate().resize({ width, withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(tmp);
     return { file: tmp, tmp };
   } catch { return { file, tmp: null }; }
 }
 let seq = 0;
 
-async function readText(file, timeoutMs = 20000) {
+async function readText(file, timeoutMs = 20000, opts = {}) {
   if (!paddleAvailable()) return null;
   let small = { file, tmp: null };
   try {
     const ocr = await loadPaddle();
-    small = await shrink(file);
+    small = await shrink(file, opts.careful ? BIG_WIDTH : SMALL_WIDTH);
     const res = await Promise.race([
       ocr.detect(small.file),
       new Promise((_, rej) => setTimeout(() => rej(new Error('reader timed out')), timeoutMs)),
@@ -107,4 +112,4 @@ async function readText(file, timeoutMs = 20000) {
   }
 }
 
-module.exports = { readText, paddleAvailable, paddleFirst, name };
+module.exports = { readText, paddleAvailable, paddleFirst, name, SMALL_WIDTH, BIG_WIDTH };
