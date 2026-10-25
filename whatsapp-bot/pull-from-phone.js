@@ -126,7 +126,9 @@ function phoneState() {
   if (has('check')) { console.log(`\nReady. Run it again without --check to copy ${count} file(s) into ${DEST}`); process.exit(0); }
 
   fs.mkdirSync(DEST, { recursive: true });
+  const gbGuess = Math.round(count * 0.3 / 1024);
   console.log(`\nCopying ${count} file(s) into ${DEST}`);
+  if (gbGuess >= 5) console.log(`That is roughly ${gbGuess} GB. Make sure the drive has room; stop with Ctrl+C any time and what has arrived is still usable.`);
   console.log('This streams straight off the phone. Leave it running.\n');
 
   const started = Date.now();
@@ -134,13 +136,36 @@ function phoneState() {
   let lastLine = '';
   const onData = d => {
     const t = d.toString();
-    lastLine = t.trim().split(/\r?\n/).pop() || lastLine;
-    const m = t.match(/\[\s*(\d+)%\]/g);
-    if (m) process.stdout.write(`\r  ${m[m.length - 1].replace(/[\[\]\s]/g, '')} done, ${Math.round((Date.now() - started) / 60000)} min elapsed     `);
+    const line = t.trim().split(/\r?\n/).pop();
+    if (line) lastLine = line;
   };
   child.stdout.on('data', onData);
   child.stderr.on('data', onData);
+
+  // The tool says nothing while it lists sixty thousand files, so count the
+  // destination ourselves. That is the only thing that proves it is moving.
+  let seen = -1, quiet = 0;
+  const watch = setInterval(() => {
+    let n = 0, mb = 0;
+    try {
+      for (const e of fs.readdirSync(DEST, { withFileTypes: true })) {
+        if (!e.isFile() || e.name.startsWith('.')) continue;
+        n++;
+        if (n % 50 === 0) { try { mb += fs.statSync(path.join(DEST, e.name)).size; } catch {} }
+      }
+    } catch { return; }
+    const mins = Math.round((Date.now() - started) / 60000);
+    if (n !== seen) {
+      seen = n; quiet = 0;
+      const pct = count ? Math.floor(n * 100 / count) : 0;
+      process.stdout.write(`\r  ${n} of ${count} copied (${pct}%), ${mins} min elapsed       `);
+    } else if (++quiet === 12) {
+      console.log('\n  Nothing new for a minute. The tool is still listing the folder; that part is silent and can take several minutes on sixty thousand files.');
+    }
+  }, 5000);
+
   child.on('exit', (code) => {
+    clearInterval(watch);
     let have = 0;
     try { have = fs.readdirSync(DEST).filter(f => !f.startsWith('.')).length; } catch {}
     console.log(`\n\n${have} file(s) are now in ${DEST}`);
@@ -153,3 +178,12 @@ function phoneState() {
     }
   });
 })().catch(e => { console.error('Failed: ' + e.message); process.exit(1); });
+
+process.on('SIGINT', () => {
+  let n = 0;
+  try { n = fs.readdirSync(DEST).filter(f => !f.startsWith('.')).length; } catch {}
+  console.log(`\n\nStopped. ${n} photo(s) are in ${DEST}.`);
+  console.log('Run the same command again to carry on, or make PDFs from what you have:');
+  console.log('  node backfill.js --since 2025-11-01 --dry');
+  process.exit(0);
+});
