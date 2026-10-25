@@ -123,6 +123,10 @@ When someone sends a payment-confirmation screenshot (proposal number + amount),
 
 `reminders.txt` (created on first start with the attendance reminders) sends fixed messages to your own chat every day. One per line: `start[-end]  [days]  message`, e.g. `10:00-10:15  Mon-Sat  ⏰ Mark attendance now - before 10:15 AM`. The message goes at the start time; if the laptop was off then, it goes as soon as the bot is up, unless the end time has passed. Edits apply within a minute, no restart. `reminders` in your own chat lists them.
 
+## Reading vehicle numbers
+
+Out of the box the bot reads numbers with tesseract.js, which is always available but tries a photo four different ways and can spend over a minute on a bad one. `node ocr-upgrade.js` installs PaddleOCR v4 running through onnxruntime (a one-off 150 MB download, offline afterwards), which looks once, stays around a second or two whatever the photo, and copes far better with sideways or dim pictures. The command then times both readers on your own photos so you can see the difference. `OCR_ENGINE=tesseract` in `.env` forces the built-in one back.
+
 ## Catching up on old photos
 
 `node pull-from-phone.js` is the reliable way to get photos off an Android phone: it uses Android's own transfer tool (downloaded from Google on first run) instead of the Windows phone connection, which counts every file before copying and stalls on a folder of twenty thousand. Turn on USB debugging once (Settings > About device > tap Build number seven times > Developer options > USB debugging), plug in, run it, tap Allow on the phone. `--check` reports readiness without copying.

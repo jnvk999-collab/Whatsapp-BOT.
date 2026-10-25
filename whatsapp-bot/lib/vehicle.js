@@ -162,10 +162,25 @@ async function variants(file) {
  * Read ONE photo. Returns { tally: Map(fullNumber->count), partial: Map(partial->count) }.
  * Called as soon as a photo arrives so the work overlaps the 45 s collection wait.
  */
+const betterReader = require('./ocr');
+
 async function readOne(file, opts = {}) {
   const tally = new Map(), partial = new Map();
   let fullText = '';
   if (!/\.(jpe?g|png)$/i.test(file)) return { tally, partial, text: '' };
+
+  // The better reader finds the writing in a photo by itself, so there is no
+  // cleaning up to do and one look is enough.
+  if (betterReader.paddleAvailable()) {
+    const started0 = Date.now();
+    const r = await betterReader.readText(file, opts.timeoutMs || 25000);
+    if (r) {
+      for (const [k, v] of extractNumbers(r.text)) tally.set(k, (tally.get(k) || 0) + v);
+      for (const [k, v] of extractPartials(r.text)) partial.set(k, (partial.get(k) || 0) + v);
+      console.log(`[ocr] ${path.basename(file)}: ${tally.size ? 'found ' + [...tally.keys()].join('/') : partial.size ? 'partial ' + [...partial.keys()].slice(0, 3).join('/') : 'nothing'} (${Math.round((Date.now() - started0) / 1000)}s)`);
+      return { tally, partial, text: r.text };
+    }
+  }
   try { if (fs.statSync(file).size < 1500) return { tally, partial, text: '' }; } catch { return { tally, partial, text: '' }; }
   const started = Date.now();
   const deadline = started + (opts.budgetMs || (fastMode ? 12000 : 60000));

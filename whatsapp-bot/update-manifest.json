@@ -1,5 +1,5 @@
 [
   "bot.js", "update.js", "run.js", "start.js", "stop.js", "status.js", "doctor.js", "backfill.js", "copy-from-phone.js", "pull-from-phone.js", "install-autostart.js", "cloud-setup.sh", "update-manifest.json", "package.json", "README.md", ".env.example",
-  "lib/calculator.js", "lib/intents.js", "lib/organise.js", "lib/pdfMerge.js", "lib/reply.js", "lib/mailer.js", "lib/routes.js", "email-routes.example.txt", "lib/ignore.js", "lib/register.js", "lib/commands.js", "lib/dispatch.js", "lib/mailwatch.js", "lib/policy.js", "lib/requests.js", "lib/renewals.js", "lib/reminders.js", "scan-policies.js", "ignore-list.example.txt", "lib/vehicle.js",
+  "lib/calculator.js", "lib/intents.js", "lib/organise.js", "lib/pdfMerge.js", "lib/reply.js", "lib/mailer.js", "lib/routes.js", "email-routes.example.txt", "lib/ignore.js", "lib/register.js", "lib/commands.js", "lib/dispatch.js", "lib/mailwatch.js", "lib/policy.js", "lib/requests.js", "lib/renewals.js", "lib/reminders.js", "scan-policies.js", "ignore-list.example.txt", "lib/vehicle.js", "ocr-upgrade.js", "lib/ocr.js",
   "test/smoke.js", "setup.bat", "setup.sh", "start.bat", "start.sh"
 ]
