@@ -125,6 +125,8 @@ When someone sends a payment-confirmation screenshot (proposal number + amount),
 
 ## Catching up on old photos
 
+`node pull-from-phone.js` is the reliable way to get photos off an Android phone: it uses Android's own transfer tool (downloaded from Google on first run) instead of the Windows phone connection, which counts every file before copying and stalls on a folder of twenty thousand. Turn on USB debugging once (Settings > About device > tap Build number seven times > Developer options > USB debugging), plug in, run it, tap Allow on the phone. `--check` reports readiness without copying.
+
 `node copy-from-phone.js` copies the WhatsApp photos off a plugged-in Android phone (Windows only) one file at a time, skipping ones already copied, which avoids the freeze Explorer hits on a folder with thousands of photos. `--since 2026-01` limits how far back, `--dest` chooses where, `--list` just reports what it can see. Stop it with Ctrl+C and run it again to continue.
 
 
