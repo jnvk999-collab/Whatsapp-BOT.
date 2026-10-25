@@ -4,6 +4,7 @@
  *   node ocr-upgrade.js            install it, then time both readers
  *   node ocr-upgrade.js --test     time both readers, install nothing
  *   node ocr-upgrade.js --test --photos=10   test on more of your photos
+ *   node ocr-upgrade.js --test --folder="C:\\path\\to\\rc photos"   test on photos you choose
  *
  * The second reader is PaddleOCR v4 running through onnxruntime. It finds the
  * writing in a photo by itself, so it reads sideways and badly lit pictures the
@@ -27,29 +28,34 @@ function dateKey(name) {
   return m ? parseInt(m[1], 10) : 0;
 }
 
-function samplePhotos(n = 4) {
+function samplePhotos(n = 6) {
   const roots = [
     path.join(home, 'Desktop', 'WhatsApp Images'),
     process.env.INBOX_DIR || path.resolve(__dirname, 'inbox'),
     process.env.MERGED_DIR || path.resolve(__dirname, 'merged'),
   ];
-  const found = [];
+  // Collect every name first and sort before touching the disk. Stopping the
+  // walk early is what kept handing back photos from 2020: the folder is in
+  // name order, so the oldest come first and this year's are never reached.
+  const all = [];
   const walk = (dir, depth) => {
-    if (depth > 3 || found.length >= 400) return;
+    if (depth > 4) return;
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (found.length >= 400) return;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { walk(p, depth + 1); continue; }
-      if (/\.(jpe?g|png)$/i.test(e.name)) { try { if (fs.statSync(p).size > 40000) found.push(p); } catch {} }
+      if (/\.(jpe?g|png)$/i.test(e.name)) all.push(p);
     }
   };
   roots.forEach(r => walk(r, 0));
-  // Newest first by the date in the file name: a photo from this year is far
-  // more likely to be a registration book than one from five years ago.
-  found.sort((a, b) => dateKey(path.basename(b)) - dateKey(path.basename(a)));
-  return found.slice(0, n);
+  all.sort((a, b) => dateKey(path.basename(b)) - dateKey(path.basename(a)));
+  const out = [];
+  for (const p of all) {
+    if (out.length >= n) break;
+    try { if (fs.statSync(p).size > 60000) out.push(p); } catch {}
+  }
+  return out;
 }
 
 async function timeReader(files, useNew) {
@@ -98,11 +104,16 @@ async function timeReader(files, useNew) {
     console.log('\nInstalled.\n');
   }
 
-  const files = samplePhotos(parseInt((process.argv.find(a => a.startsWith('--photos=')) || '--photos=6').split('=')[1], 10) || 6);
+  const fromFlag = (process.argv.find(a => a.startsWith('--folder=')) || '').split('=')[1];
+  const files = fromFlag ? (() => {
+    const dir = path.resolve(fromFlag);
+    try { return fs.readdirSync(dir).filter(f => /\.(jpe?g|png)$/i.test(f)).slice(0, 12).map(f => path.join(dir, f)); } catch { return []; }
+  })() : samplePhotos(parseInt((process.argv.find(a => a.startsWith('--photos=')) || '--photos=6').split('=')[1], 10) || 6);
   if (!files.length) {
     console.log('No photos of your own to test with yet, so no timings. It will be used from the next run.');
     return;
   }
+  console.log('Testing on your newest photos: ' + files.map(f => path.basename(f)).join(', ') + '\n');
   console.log(`Timing both readers on ${files.length} of your own photos. The first read of each loads the reader, so it is slower.\n`);
 
   const neu = await timeReader(files, true);
