@@ -97,6 +97,18 @@ const today = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() *
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
 /** Policies expiring between today and today+days (inclusive), Excel first, scanned ones merged (no duplicates by vehicle/policy). */
+/**
+ * Which policies may be reminded about. When a renewals sheet exists it is the
+ * only list that counts: policies picked up from scanned Gmail PDFs are used to
+ * fill in missing phone numbers and vehicle numbers, never to add reminders of
+ * their own. RENEWAL_SOURCE=all in .env brings the scanned ones back in.
+ */
+function remindFrom(rows, scanned, file) {
+  const mode = (process.env.RENEWAL_SOURCE || 'sheet').toLowerCase();
+  if (!file) return scanned;                 // no sheet at all: scanned is all there is
+  return mode === 'all' ? [...rows, ...scanned] : rows;
+}
+
 async function due(days = 2, { includePast = 0 } = {}) {
   const { rows, file } = await loadExcel();
   const scanned = loadScanned();
@@ -110,7 +122,7 @@ async function due(days = 2, { includePast = 0 } = {}) {
     if (!r.name && p.name) r.name = p.name;
     r.file = p.file;
   }
-  const all = [...rows, ...scanned];
+  const all = remindFrom(rows, scanned, file);
   const seen = new Set(), out = [];
   const from = addDays(today(), -includePast), to = addDays(today(), days);
   for (const r of all.sort((a, b) => a.expiry.localeCompare(b.expiry))) {
@@ -153,7 +165,7 @@ async function milestoneReminders(milestones = [10, 7, 3, 1]) {
   const scanned = loadScanned();
   const byPolicy = new Map(scanned.map(p => [p.policy.replace(/\s+/g, ''), p]));
   for (const r of rows) { const p = byPolicy.get((r.policy || '').replace(/\s+/g, '')); if (p) { r.phone = r.phone || p.phone; r.vehicle = r.vehicle || p.vehicle; r.name = r.name || p.name; r.file = p.file; } }
-  const all = [...rows, ...scanned];
+  const all = remindFrom(rows, scanned, file);
   const sent = loadSent();
   const t = today();
   const out = [];   // { milestone, list }

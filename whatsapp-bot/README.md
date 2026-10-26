@@ -144,7 +144,7 @@ Options: `--rename` (keep the PDFs, read the numbers again only for the ones nam
 
 ## Renewals
 
-Put your renewal sheet in the bot folder as `renewals.xlsx` (columns are found by name: expiry / name / vehicle / policy / mobile). Every day at `RENEWAL_HOUR` the bot sends you, once per policy per milestone, the policies reaching `RENEWAL_MILESTONES` (default 10, 7, 3 and 1 days before), with phone numbers; `due` or `due 7` in your own chat shows the upcoming list any time. `node scan-policies.js 365` pulls last year's policy PDFs from Gmail, reads policy number, insured, vehicle, period and mobile, and writes `merged/register/Policies.xlsx`; those expiries feed the reminders too.
+Put your renewal sheet in the bot folder as `renewals.xlsx` (columns are found by name: expiry / name / vehicle / policy / mobile). Every day at `RENEWAL_HOUR` the bot sends you, once per policy per milestone, the policies reaching `RENEWAL_MILESTONES` (default 10, 7, 3 and 1 days before), with phone numbers; `due` or `due 7` in your own chat shows the upcoming list any time. `node scan-policies.js 365` pulls last year's policy PDFs from Gmail, reads policy number, insured, vehicle, period and mobile, and writes `merged/register/Policies.xlsx`; Those scanned policies fill in phone and vehicle numbers missing from the sheet, but they do not raise reminders of their own: the sheet is the list. `RENEWAL_SOURCE=all` in `.env` lets them raise reminders too.
 
 ## Which WhatsApp connection to use
 
