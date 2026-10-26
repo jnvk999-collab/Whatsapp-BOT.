@@ -148,7 +148,7 @@ const SENT_FILE = () => path.join(org.MERGED_ROOT, 'renewal-reminders.json');
 function loadSent() { try { return JSON.parse(fs.readFileSync(SENT_FILE(), 'utf8')); } catch { return {}; } }
 function saveSent(o) { try { fs.mkdirSync(org.MERGED_ROOT, { recursive: true }); fs.writeFileSync(SENT_FILE(), JSON.stringify(o)); } catch {} }
 
-async function milestoneReminders(milestones = [7, 2, 0]) {
+async function milestoneReminders(milestones = [10, 7, 3, 1]) {
   const { rows, file } = await loadExcel();
   const scanned = loadScanned();
   const byPolicy = new Map(scanned.map(p => [p.policy.replace(/\s+/g, ''), p]));

@@ -62,7 +62,7 @@ const CFG = {
   dispatchAuto: process.env.DISPATCH_AUTO === '1',
   // Renewal reminder: every day at RENEWAL_HOUR (24h), policies expiring within RENEWAL_DAYS.
   renewalDays: parseInt(process.env.RENEWAL_DAYS || '2', 10),
-  renewalMilestones: (process.env.RENEWAL_MILESTONES || '7,2,0').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
+  renewalMilestones: (process.env.RENEWAL_MILESTONES || '10,7,3,1').split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)),
   renewalHour: parseInt(process.env.RENEWAL_HOUR || '8', 10),
   // Only make a PDF when a set has at least this many photos (vehicle inspection sets).
   // Single greeting images / forwards are filed in the inbox but produce nothing.
