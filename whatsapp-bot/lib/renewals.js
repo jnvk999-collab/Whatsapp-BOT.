@@ -192,6 +192,33 @@ async function milestoneReminders(milestones = [10, 7, 3, 1]) {
   return { batches: out, file, total: all.length };
 }
 
+/** One policy, one message: the whole thing readable at a glance on a phone. */
+function formatOne(r, m) {
+  const d = r.daysLeft;
+  const urgency = d === 0 ? '🚨 EXPIRES TODAY' : d === 1 ? '🚨 EXPIRES TOMORROW' : d <= 3 ? `🔴 ${d} days left` : d <= 7 ? `🟠 ${d} days left` : `🟡 ${d} days left`;
+  const [y, mo, da] = r.expiry.split('-');
+  const dt = new Date(+y, +mo - 1, +da);
+  const day = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dt.getDay()];
+  const L = [];
+  L.push(`${urgency}  ·  renewal`);
+  L.push('');
+  L.push(`*${r.name || pretty(r.vehicle) || r.policy}*`);
+  if (r.vehicle) L.push(`🚗 ${pretty(r.vehicle)}`);
+  L.push(`📅 expires ${da}/${mo}/${y}, ${day}`);
+  if (r.policy) L.push(`📄 ${r.policy}`);
+  const bits = [r.type, r.premium ? '₹' + Number(r.premium).toLocaleString('en-IN') : ''].filter(Boolean);
+  if (bits.length) L.push(`💰 ${bits.join('  ·  ')}`);
+  if (r.agent) L.push(`👤 ${r.agent}`);
+  if (r.phone) {
+    const ten = String(r.phone).replace(/\D/g, '').slice(-10);
+    L.push(`📞 ${r.phone}`);
+    if (ten.length === 10) L.push(`https://wa.me/91${ten}`);
+  } else {
+    L.push('📞 no number in the sheet');
+  }
+  return L.join('\n');
+}
+
 function formatMilestone(m, list) {
   const head = m === 0 ? '🚨 *Expiring TODAY*' : m <= 2 ? `🚨 *Expiring within ${m} days*` : `⏰ *Renewal reminder: ${m} days*`;
   const lines = [`${head} (${list.length})`];
@@ -205,4 +232,4 @@ function formatMilestone(m, list) {
   return lines.join('\n');
 }
 
-module.exports = { due, format, loadExcel, loadScanned, findFile, today, milestoneReminders, formatMilestone };
+module.exports = { due, format, loadExcel, loadScanned, findFile, today, milestoneReminders, formatMilestone, formatOne };

@@ -563,10 +563,16 @@ setInterval(async () => {
   lastRenewalRun = day;
   try {
     const r = await renewals.milestoneReminders(CFG.renewalMilestones);
-    for (const b of r.batches) {
-      await sendText(myJid, renewals.formatMilestone(b.milestone, b.list));
-      console.log(`[renewals] ${b.milestone}-day reminder: ${b.list.length} polic${b.list.length === 1 ? 'y' : 'ies'}`);
+    // One message per policy. A single message holding five of them is a wall
+    // of text on a phone; separate ones can be read, forwarded and ticked off.
+    const all = r.batches.flatMap(b => b.list.map(row => ({ row, milestone: b.milestone })));
+    all.sort((a, b) => a.row.daysLeft - b.row.daysLeft);
+    if (all.length > 1) await sendText(myJid, `🔔 *${all.length} renewals need attention* — one message each, soonest first.`);
+    for (const { row, milestone } of all) {
+      await sendText(myJid, renewals.formatOne(row, milestone));
+      await new Promise(res => setTimeout(res, 1200));      // don't flood the chat
     }
+    if (all.length) console.log(`[renewals] sent ${all.length} reminder(s), one per policy`);
     if (!r.batches.length) console.log(`[renewals] checked ${r.total} policies, nothing due today`);
   } catch (e) { console.error('[renewals] ' + e.message); }
 }, 60 * 1000);
