@@ -90,12 +90,35 @@ function send() {
     for (const ip of ips.slice(0, 3)) console.log(`   node migrate.js receive http://${ip}:${PORT}/${code}`);
     if (!ips.length) console.log('   (no network address found: is Tailscale running?)');
     console.log('\nThe first line is usually the Tailscale one (it starts with 100.).');
+    console.log('\n*** Leave THIS window open and this command running until the other');
+    console.log('*** computer says it has finished. Closing it stops the copy.');
     if (ips.length) {
       const raw = 'https://raw.githubusercontent.com/jnvk999-collab/PREMIUM-CALCULATOR/claude/whatsapp-photo-pdf-automation-mgr9gu/whatsapp-bot/new-pc-setup.ps1';
       console.log('\nOr, on a NEW computer with nothing set up yet, paste this one line into');
       console.log('PowerShell there instead. It installs Node.js, downloads the bot, copies');
       console.log('everything across, installs it and starts it:\n');
-      console.log(`   & ([scriptblock]::Create((irm ${raw}))) -From 'http://${ips[0]}:${PORT}/${code}'`);
+      const oneLine = `& ([scriptblock]::Create((irm ${raw}))) -From 'http://${ips[0]}:${PORT}/${code}'`;
+      console.log('   ' + oneLine);
+      // The line wraps across the terminal, and a copy that breaks in the wrong
+      // place fails. Put it in a file so it can be copied in one piece.
+      try {
+        const f = path.join(HERE, 'new-pc-command.txt');
+        fs.writeFileSync(f, [
+          'Paste this ONE line into PowerShell on the new computer:',
+          '',
+          oneLine,
+          '',
+          'If the new computer already has Node.js and the bot folder, use this instead,',
+          'from inside its whatsapp-bot folder:',
+          '',
+          `node migrate.js receive http://${ips[0]}:${PORT}/${code}`,
+          '',
+          'Leave the sender running on this computer until the other one says it is done.',
+        ].join('\n'));
+        console.log('\nThat line is also saved in  ' + f);
+        console.log('Open it in Notepad and copy from there: it is long and copying it out of');
+        console.log('this window often breaks it across lines.');
+      } catch {}
     }
     console.log('Leave this running until the other computer says it is done, then press Ctrl+C.');
   });
