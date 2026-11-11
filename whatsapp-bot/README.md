@@ -35,7 +35,7 @@ The important design choice: **the bot does not re-implement any rating logic.**
 
 ## Moving to another computer
 
-`node pack.js` puts everything this computer holds that the next one cannot download — settings, the WhatsApp login, group and routing lists, the renewal sheet, the merged PDFs and the register — into one zip on the Desktop. The new computer downloads the code from GitHub and the zip goes on top of it. `MIGRATION.md` has the step-by-step. `--no-merged` leaves the PDFs out when the zip would be too big; `--no-login` leaves the WhatsApp login behind so the new machine scans a QR.
+`node pack.js` puts everything this computer holds that the next one cannot download — settings, the WhatsApp login, group and routing lists, the renewal sheet, the merged PDFs and the register — into one zip on the Desktop. The new computer downloads the code from GitHub and the zip goes on top of it. `MIGRATION.md` has the step-by-step. When both machines are on the same network, `node migrate.js send` on the old one and `node migrate.js receive <address>` on the new one copies everything straight across instead, resuming if interrupted. `--no-merged` leaves the PDFs out when the zip would be too big; `--no-login` leaves the WhatsApp login behind so the new machine scans a QR.
 
 ## Running it in the cloud (laptop can be off)
 

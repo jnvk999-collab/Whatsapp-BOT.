@@ -19,7 +19,34 @@ them, one unzip puts them back.
 It is only needed if you want to run the backfill again. Copy it separately, or
 leave it behind.
 
-## On the old computer
+## If both computers are on the same network (Tailscale, office LAN)
+
+No pen drive and no zip: copy straight across.
+
+On the **old** computer:
+
+```
+node stop.js
+node migrate.js send
+```
+
+It prints a line to run on the new computer and keeps serving until you press
+Ctrl+C. On the **new** computer, after steps 1 and 2 below (Node.js, and the
+bot downloaded from GitHub), in its `whatsapp-bot` folder:
+
+```
+node migrate.js receive http://100.x.y.z:8099/<code>
+```
+
+Use the address the sender printed, code and all. The Tailscale one starts with
+`100.`. Stop it any time with Ctrl+C and run the same line again: files already
+there are skipped, so it carries on instead of starting over. Then do step 4.
+
+The address carries a one-time code and the sender answers only to it, but it
+does serve your settings and WhatsApp login, so press Ctrl+C when the copy is
+finished rather than leaving it running.
+
+## On the old computer (pen drive instead)
 
 ```
 cd C:\Users\dell\Desktop\PREMIUM-CALCULATOR-claude-whatsapp-photo-pdf-automation-mgr9gu\whatsapp-bot
