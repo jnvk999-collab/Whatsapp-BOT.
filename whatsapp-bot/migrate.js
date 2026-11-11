@@ -124,27 +124,46 @@ async function receive(base) {
   const total = files.reduce((n, f) => n + f.size, 0);
   console.log(files.length + ' file(s), ' + mb(total) + '\n');
 
-  let done = 0, had = 0, got = 0, failed = 0;
-  for (const f of files) {
-    const dest = path.resolve(HERE, f.rel);
-    if (!dest.startsWith(HERE)) { failed++; continue; }
-    done++;
-    try {
-      if (fs.existsSync(dest) && fs.statSync(dest).size === f.size) { had++; continue; }
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      const r = await fetch(base + '/file/' + f.rel.split('/').map(encodeURIComponent).join('/'));
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
-      got++;
-    } catch (e) {
-      failed++;
-      console.log('  could not get ' + f.rel + ': ' + e.message);
-    }
-    if (done % 20 === 0 || done === files.length) {
-      process.stdout.write(`\r  ${done} of ${files.length}   new ${got}   already here ${had}` + (failed ? `   failed ${failed}` : '') + '    ');
+  // 21,000 files one after another is a lot of waiting on round trips, so
+  // fetch several at once. Files already here at the right size are skipped,
+  // which is what makes a stopped copy carry on instead of starting over.
+  const LANES = parseInt(process.env.MIGRATE_LANES || '6', 10);
+  let done = 0, had = 0, got = 0, failed = 0, bytes = 0;
+  const started = Date.now();
+  let next = 0;
+
+  const show = () => {
+    const pct = total ? Math.floor(bytes * 100 / total) : 0;
+    const mins = (Date.now() - started) / 60000;
+    const rate = mins > 0.05 ? `  ${(bytes / 1048576 / (mins * 60)).toFixed(1)} MB/s` : '';
+    process.stdout.write(`\r  ${done} of ${files.length} files   ${mb(bytes)} of ${mb(total)} (${pct}%)${rate}` + (failed ? `   failed ${failed}` : '') + '    ');
+  };
+
+  async function lane() {
+    while (next < files.length) {
+      const f = files[next++];
+      const dest = path.resolve(HERE, f.rel);
+      if (!dest.startsWith(HERE)) { failed++; done++; continue; }
+      try {
+        if (fs.existsSync(dest) && fs.statSync(dest).size === f.size) { had++; bytes += f.size; done++; show(); continue; }
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        const r = await fetch(base + '/file/' + f.rel.split('/').map(encodeURIComponent).join('/'));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
+        got++; bytes += f.size;
+      } catch (e) {
+        failed++;
+        if (failed <= 5) console.log('\n  could not get ' + f.rel + ': ' + e.message);
+      }
+      done++;
+      if (done % 10 === 0 || done === files.length) show();
     }
   }
-  console.log('\n\nDone. ' + got + ' file(s) copied, ' + had + ' were already here' + (failed ? ', ' + failed + ' failed' : '') + '.');
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(12, LANES)) }, lane));
+  show();
+
+  const mins = Math.round((Date.now() - started) / 60000);
+  console.log('\n\nDone in ' + (mins || '<1') + ' min. ' + got + ' file(s) copied, ' + had + ' were already here' + (failed ? ', ' + failed + ' failed' : '') + '.');
   if (failed) console.log('Run the same line again to pick up the ones that failed.');
   console.log('\nNow, on this computer:');
   console.log('   npm install');
