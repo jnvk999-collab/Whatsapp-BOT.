@@ -90,6 +90,13 @@ function send() {
     for (const ip of ips.slice(0, 3)) console.log(`   node migrate.js receive http://${ip}:${PORT}/${code}`);
     if (!ips.length) console.log('   (no network address found: is Tailscale running?)');
     console.log('\nThe first line is usually the Tailscale one (it starts with 100.).');
+    if (ips.length) {
+      const raw = 'https://raw.githubusercontent.com/jnvk999-collab/PREMIUM-CALCULATOR/claude/whatsapp-photo-pdf-automation-mgr9gu/whatsapp-bot/new-pc-setup.ps1';
+      console.log('\nOr, on a NEW computer with nothing set up yet, paste this one line into');
+      console.log('PowerShell there instead. It installs Node.js, downloads the bot, copies');
+      console.log('everything across, installs it and starts it:\n');
+      console.log(`   & ([scriptblock]::Create((irm ${raw}))) -From 'http://${ips[0]}:${PORT}/${code}'`);
+    }
     console.log('Leave this running until the other computer says it is done, then press Ctrl+C.');
   });
   srv.on('error', e => {

@@ -19,6 +19,27 @@ them, one unzip puts them back.
 It is only needed if you want to run the backfill again. Copy it separately, or
 leave it behind.
 
+## The short way: one command on each computer
+
+On the **old** computer:
+
+```
+node stop.js
+node migrate.js send
+```
+
+It prints two addresses. The second is a single PowerShell line for a brand new
+computer with nothing installed on it. Paste that line into PowerShell on the
+**new** computer and it installs Node.js, downloads the bot, copies your
+settings, WhatsApp login, lists and PDFs across, installs everything, checks it
+and starts it, including starting with Windows.
+
+If the new computer already has Node.js and the bot folder, use the first
+address instead: `node migrate.js receive http://100.x.y.z:8099/<code>`.
+
+Either way, when it finishes: press Ctrl+C on the old computer, run
+`node stop.js` there, and remove it from WhatsApp > Settings > Linked devices.
+
 ## If both computers are on the same network (Tailscale, office LAN)
 
 No pen drive and no zip: copy straight across.
