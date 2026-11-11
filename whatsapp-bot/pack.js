@@ -2,7 +2,8 @@
  * Pack everything this computer holds that the next one cannot download:
  *
  *   node pack.js                 make the zip on the Desktop
- *   node pack.js --no-merged     leave the merged PDFs out (much smaller)
+ *   node pack.js --no-merged     leave the merged PDFs out of it entirely
+ *   node pack.js --all           force even the big folders into the zip (slow)
  *   node pack.js --no-login      leave the WhatsApp login out (scan a QR instead)
  *   node pack.js --dest "D:\"    put the zip somewhere else
  *
@@ -80,22 +81,31 @@ const copyInto = (from, to) => {
   for (const it of missing) console.log(`  not here   ${it.p.padEnd(22)}           ${it.why}`);
 
   if (!take.length) { console.log('\nNothing to pack. Are you in the whatsapp-bot folder?'); process.exit(1); }
-  console.log(`\n  total ${mb(total)}`);
-  if (total > 500 * 1048576) console.log('  That is large because of the merged PDFs. Use --no-merged and copy that folder separately if you prefer.');
 
-  // stage, so the zip keeps the same folder shape the bot expects
-  const stage = path.join(require('os').tmpdir(), 'oic-pack-' + process.pid);
-  fs.rmSync(stage, { recursive: true, force: true });
-  fs.mkdirSync(stage, { recursive: true });
-  for (const it of take) copyInto(it.full, path.join(stage, it.p));
+  // PDFs are already compressed, so zipping gigabytes of them buys nothing and
+  // costs an hour. Anything big is copied across as a folder instead.
+  const BIG = 200 * 1048576;
+  const byHand = has('all') ? [] : take.filter(it => it.size > BIG);
+  const inZip = take.filter(it => !byHand.includes(it));
+  if (byHand.length) {
+    console.log('');
+    for (const it of byHand) console.log(`  too big to zip: ${it.p}  (${mb(it.size)}) — copy the folder across as it is`);
+  }
+  console.log(`\n  zip: ${mb(inZip.reduce((n, i) => n + i.size, 0))}` + (byHand.length ? `   plus ${mb(byHand.reduce((n, i) => n + i.size, 0))} of folders to copy by hand` : ''));
 
-  // a note to whoever opens the zip
-  fs.writeFileSync(path.join(stage, 'READ-ME-FIRST.txt'), [
+  // Build the archive straight from this folder. Copying 4 GB to a temp folder
+  // first needed twice the disk and most of an hour.
+  const noteDir = path.join(require('os').tmpdir(), 'oic-pack-note-' + process.pid);
+  fs.rmSync(noteDir, { recursive: true, force: true });
+  fs.mkdirSync(noteDir, { recursive: true });
+  fs.writeFileSync(path.join(noteDir, 'READ-ME-FIRST.txt'), [
     'OIC WhatsApp bot — everything from the old computer',
     'Packed ' + new Date().toLocaleString('en-IN'),
     '',
-    'This holds settings, the WhatsApp login and your PDFs. It does NOT hold the',
+    'This holds settings, the WhatsApp login and your lists. It does NOT hold the',
     'program: the new computer downloads that from GitHub, newest version.',
+    byHand.length ? 'The merged PDFs are NOT in here either: copy these folders across as they are:' : '',
+    ...byHand.map(it => '   ' + it.p),
     '',
     'On the new computer:',
     '  1. Install Node.js from nodejs.org (the LTS button).',
@@ -103,6 +113,7 @@ const copyInto = (from, to) => {
     '     https://github.com/jnvk999-collab/PREMIUM-CALCULATOR/archive/refs/heads/claude/whatsapp-photo-pdf-automation-mgr9gu.zip',
     '     Unzip it. The folder you want inside is whatsapp-bot.',
     '  3. Unzip THIS file into that same whatsapp-bot folder, keeping the folder names.',
+    byHand.length ? '  3b. Copy the folders listed above into it too.' : '',
     '  4. Open cmd in that folder and run, one at a time:',
     '       npm install',
     '       node ocr-upgrade.js',
@@ -112,33 +123,36 @@ const copyInto = (from, to) => {
     '',
     'Keep this zip private: it contains your email app password and WhatsApp login.',
     'Delete it from both computers once the new one works.',
-  ].join('\n'));
+  ].filter(l => l !== '').join('\n'));
 
   console.log('\n  making the zip...');
   fs.rmSync(OUT, { force: true });
   let r;
+  const names = inZip.map(it => it.p);
   if (process.platform === 'win32') {
-    // tar ships with Windows 10 and later and takes "." so files whose names
-    // begin with a dot, .env above all, are not quietly left out.
-    r = spawnSync('tar.exe', ['-a', '-c', '-f', OUT, '-C', stage, '.'], { stdio: 'pipe' });
-    if (r.status !== 0 || !fs.existsSync(OUT)) {
-      r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-        `Compress-Archive -Path '${stage.replace(/'/g, "''")}\\*' -Force -DestinationPath '${OUT.replace(/'/g, "''")}'`], { stdio: 'pipe' });
-    }
+    // tar ships with Windows 10 and later and keeps names that start with a dot
+    r = spawnSync('tar.exe', ['-a', '-c', '-f', OUT, '-C', HERE, ...names, '-C', noteDir, 'READ-ME-FIRST.txt'], { stdio: 'pipe' });
   } else {
-    r = spawnSync('sh', ['-c', `cd "${stage}" && zip -qr "${OUT}" .`], { stdio: 'pipe' });
+    fs.copyFileSync(path.join(noteDir, 'READ-ME-FIRST.txt'), path.join(HERE, 'READ-ME-FIRST.txt'));
+    r = spawnSync('sh', ['-c', `cd "${HERE}" && zip -qr "${OUT}" ${names.map(n => `"${n}"`).join(' ')} READ-ME-FIRST.txt`], { stdio: 'pipe' });
+    try { fs.unlinkSync(path.join(HERE, 'READ-ME-FIRST.txt')); } catch {}
   }
+  fs.rmSync(noteDir, { recursive: true, force: true });
   if (r.status !== 0 || !fs.existsSync(OUT)) {
-    console.log('\nCould not make the zip automatically. Everything is gathered here:');
-    console.log('  ' + stage);
-    console.log('Right-click that folder in Windows, Send to, Compressed (zipped) folder, and copy that.');
+    console.log('\nCould not make the zip: ' + String(r.stderr || '').trim().split('\n')[0]);
+    console.log('Select these in the bot folder, right-click, Send to, Compressed (zipped) folder:');
+    console.log('  ' + names.join('  '));
     process.exit(1);
   }
-  fs.rmSync(stage, { recursive: true, force: true });
 
   console.log(`\nDone.  ${OUT}  (${mb(fs.statSync(OUT).size)})\n`);
   console.log('Copy it to the new computer on a pen drive. Inside it is READ-ME-FIRST.txt');
   console.log('with the steps, and MIGRATION.md in the bot folder has the long version.');
+  if (byHand.length) {
+    console.log('\nAlso drag these folders onto the pen drive as they are, then into the new');
+    console.log('bot folder. They are mostly PDFs, so zipping them would only waste time:');
+    for (const it of byHand) console.log('  ' + path.join(HERE, it.p) + '   (' + mb(it.size) + ')');
+  }
   console.log('\nIt contains your Gmail app password and WhatsApp login, so do not email it,');
   console.log('and delete it from both computers once the new one is working.');
 })().catch(e => { console.error('Packing failed: ' + e.message); process.exit(1); });
