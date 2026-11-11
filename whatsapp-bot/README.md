@@ -33,6 +33,10 @@ WhatsApp (your number, linked like WhatsApp Web)
 
 The important design choice: **the bot does not re-implement any rating logic.** It opens `index.html` once in headless Chromium and drives it the same way the calculator's own 700-case regression suite does. When you upload a new `index.html` with new rates, the bot prices with the new rates on its next quote. The smoke test proves this by checking one of the calculator's golden cases (₹1,915) through the bot's driver.
 
+## Moving to another computer
+
+`node pack.js` puts everything this computer holds that the next one cannot download — settings, the WhatsApp login, group and routing lists, the renewal sheet, the merged PDFs and the register — into one zip on the Desktop. The new computer downloads the code from GitHub and the zip goes on top of it. `MIGRATION.md` has the step-by-step. `--no-merged` leaves the PDFs out when the zip would be too big; `--no-login` leaves the WhatsApp login behind so the new machine scans a QR.
+
 ## Running it in the cloud (laptop can be off)
 
 On a fresh Ubuntu server (DigitalOcean, Hetzner, AWS Lightsail, any VPS), run as root:
