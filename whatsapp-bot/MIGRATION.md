@@ -137,3 +137,10 @@ Delete the migration zip from both machines.
 `node doctor.js` names the problem in plain words: bot not running, WhatsApp
 not linked, a group name that matches nothing, the number reader missing. Run
 it first, and send the output if it still does not make sense.
+
+## "Access is denied" when setting up automatic starting
+
+Task Scheduler needs administrator rights on some computers. `install-autostart.js`
+now notices and uses your Startup folder instead, which needs none and starts the
+bot at login just the same. If you want the Task Scheduler entry anyway, right-click
+PowerShell, choose Run as administrator, go to the bot folder and run it again.
